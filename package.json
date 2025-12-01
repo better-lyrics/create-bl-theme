@@ -1,0 +1,24 @@
+{
+  "name": "create-bl-theme",
+  "version": "1.0.1",
+  "description": "CLI tool to scaffold Better Lyrics themes",
+  "type": "module",
+  "bin": {
+    "create-bl-theme": "bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js"
+  },
+  "keywords": [
+    "better-lyrics",
+    "theme",
+    "cli",
+    "scaffold"
+  ],
+  "author": "boidushya",
+  "license": "MIT",
+  "dependencies": {
+    "prompts": "^2.4.2",
+    "picocolors": "^1.1.1"
+  }
+}

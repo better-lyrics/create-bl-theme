@@ -1,0 +1,51 @@
+/*
+ * Better Lyrics Theme
+ *
+ * This CSS file customizes the appearance of lyrics in Better Lyrics.
+ * Edit these styles to create your unique theme.
+ *
+ * Tip: Use the browser DevTools to inspect Better Lyrics elements
+ * and find the selectors you want to style.
+ */
+
+/* Main lyrics container */
+.blyrics-container {
+  /* Add your container styles here */
+}
+
+/* Individual lyric lines */
+.blyrics-line {
+  /* Style for each line of lyrics */
+}
+
+/* Currently active/highlighted lyric */
+.blyrics-line.active {
+  /* Make the current line stand out */
+}
+
+/* Lyrics text styling */
+.blyrics-text {
+  /* Font, color, and text styles */
+}
+
+/*
+ * Example: Dark theme starter
+ * Uncomment and modify as needed
+ */
+
+/*
+.blyrics-container {
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(10px);
+}
+
+.blyrics-line {
+  color: rgba(255, 255, 255, 0.6);
+  transition: all 0.3s ease;
+}
+
+.blyrics-line.active {
+  color: #ffffff;
+  transform: scale(1.05);
+}
+*/
