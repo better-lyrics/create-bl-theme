@@ -1,6 +1,6 @@
 {
   "name": "create-bl-theme",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "CLI tool to scaffold Better Lyrics themes",
   "type": "module",
   "bin": {
