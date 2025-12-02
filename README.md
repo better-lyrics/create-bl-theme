@@ -34,10 +34,18 @@ The CLI will prompt you for:
 ### Validate a theme
 
 ```bash
-create-bl-theme validate [directory]
+# Validate a local directory
+create-bl-theme validate ./my-theme
+
+# Validate directly from a GitHub repository
+create-bl-theme validate https://github.com/username/theme-repo
 ```
 
-Checks that your theme has all required files and valid metadata.
+The validator checks:
+- Required files (metadata.json, style.css, images/)
+- Valid JSON structure and required fields
+- Image integrity (detects corrupted files)
+- Image dimensions (recommends 1280x720, but other sizes work fine)
 
 ## Generated Structure
 

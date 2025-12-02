@@ -4,12 +4,22 @@ import prompts from "prompts";
 import pc from "picocolors";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { fileURLToPath } from "url";
+import { imageSize } from "image-size";
+import { execSync } from "child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const TEMPLATES_DIR = path.join(__dirname, "..", "templates");
+
+// Recommended image dimensions
+const RECOMMENDED_WIDTH = 1280;
+const RECOMMENDED_HEIGHT = 720;
+
+// GitHub URL patterns
+const GITHUB_URL_PATTERN = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)(?:\/)?(?:\.git)?$/;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -35,12 +45,13 @@ async function main() {
 
 function showHelp() {
   console.log(`${pc.bold("Usage:")}
-  ${pc.cyan("create-bl-theme")} [name]        Create a new theme
-  ${pc.cyan("create-bl-theme")} validate [dir] Validate a theme directory
+  ${pc.cyan("create-bl-theme")} [name]              Create a new theme
+  ${pc.cyan("create-bl-theme")} validate [dir|url]  Validate a theme (local or GitHub)
 
 ${pc.bold("Examples:")}
   ${pc.dim("$")} create-bl-theme my-awesome-theme
   ${pc.dim("$")} create-bl-theme validate ./my-theme
+  ${pc.dim("$")} create-bl-theme validate https://github.com/user/theme-repo
 `);
 }
 
@@ -277,9 +288,44 @@ MIT
 }
 
 async function validate(dir) {
-  const fullPath = path.resolve(process.cwd(), dir);
+  let fullPath;
+  let tempDir = null;
   let errors = [];
   let warnings = [];
+
+  // Check if input is a GitHub URL
+  const githubMatch = dir.match(GITHUB_URL_PATTERN);
+
+  if (githubMatch) {
+    const [, owner, repo] = githubMatch;
+    const repoUrl = `https://github.com/${owner}/${repo}.git`;
+
+    console.log(pc.dim(`Cloning ${pc.cyan(`${owner}/${repo}`)} from GitHub...\n`));
+
+    try {
+      // Create temp directory
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bl-theme-"));
+      fullPath = tempDir;
+
+      // Clone the repository (shallow clone for speed)
+      execSync(`git clone --depth 1 ${repoUrl} "${tempDir}"`, {
+        stdio: "pipe",
+      });
+
+      console.log(pc.green(`  Cloned successfully!\n`));
+    } catch (e) {
+      console.log(pc.red(`Error: Could not clone repository "${owner}/${repo}"`));
+      console.log(pc.dim(`  Make sure the repository exists and is publicly accessible.\n`));
+
+      if (e.message) {
+        console.log(pc.dim(`  ${e.message}`));
+      }
+
+      process.exit(1);
+    }
+  } else {
+    fullPath = path.resolve(process.cwd(), dir);
+  }
 
   console.log(pc.dim(`Validating theme at ${fullPath}...\n`));
 
@@ -344,6 +390,19 @@ async function validate(dir) {
         errors.push("metadata.json: images must be an array");
       }
 
+      // Check if images referenced in metadata.json exist in images/
+      if (metadata.images && Array.isArray(metadata.images)) {
+        const imagesDir = path.join(fullPath, "images");
+        for (const image of metadata.images) {
+          const imagePath = path.join(imagesDir, image);
+          if (!fs.existsSync(imagePath)) {
+            errors.push(
+              `metadata.json: image "${image}" not found in images/ directory`
+            );
+          }
+        }
+      }
+
       if (!metadata.tags) {
         warnings.push("metadata.json: consider adding tags for discoverability");
       }
@@ -373,6 +432,45 @@ async function validate(dir) {
       .filter((f) => /\.(png|jpg|jpeg|gif|webp)$/i.test(f));
     if (images.length === 0) {
       errors.push("images/ directory must contain at least one image");
+    } else {
+      // Validate each image
+      for (const image of images) {
+        const imagePath = path.join(imagesDir, image);
+
+        try {
+          const imageBuffer = fs.readFileSync(imagePath);
+          const dimensions = imageSize(imageBuffer);
+
+          if (!dimensions || !dimensions.width || !dimensions.height) {
+            errors.push(
+              `${pc.bold(image)}: Unable to read image dimensions - the file may be corrupted or in an unsupported format`
+            );
+            continue;
+          }
+
+          const { width, height } = dimensions;
+          const aspectRatio = (width / height).toFixed(2);
+          const recommendedAspectRatio = (RECOMMENDED_WIDTH / RECOMMENDED_HEIGHT).toFixed(2);
+
+          // Only warn if aspect ratio differs from recommended 16:9
+          if (aspectRatio !== recommendedAspectRatio) {
+            warnings.push(`${pc.bold(image)}: ${width}x${height} (aspect ratio ${aspectRatio})`);
+          }
+        } catch (e) {
+          // Handle corrupted or unreadable images
+          if (e.message.includes("unsupported") || e.message.includes("Invalid")) {
+            errors.push(
+              `${pc.bold(image)}: This image appears to be corrupted or in an unsupported format\n      ${pc.dim("Please ensure the file is a valid image (PNG, JPG, GIF, or WebP)")}`
+            );
+          } else if (e.code === "ENOENT") {
+            errors.push(`${pc.bold(image)}: File not found`);
+          } else {
+            errors.push(
+              `${pc.bold(image)}: Could not validate image - ${e.message}\n      ${pc.dim("The file may be corrupted or inaccessible")}`
+            );
+          }
+        }
+      }
     }
   }
 
@@ -401,11 +499,24 @@ async function validate(dir) {
     }
     if (warnings.length > 0) {
       console.log(pc.yellow(pc.bold("\n  Warnings:")));
+      console.log(pc.yellow("  Non-standard aspect ratios (recommended: 16:9)"));
       warnings.forEach((w) => console.log(pc.yellow(`    - ${w}`)));
+      console.log();
+      console.log(pc.dim(pc.yellow("  This is just a suggestion - your images will still work fine!")));
+      console.log(pc.dim(pc.yellow("  Different aspect ratios can be intentional for your theme's design.")));
     }
   }
 
   console.log();
+
+  // Cleanup temp directory if we cloned from GitHub
+  if (tempDir) {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+  }
 
   if (errors.length > 0) {
     process.exit(1);
