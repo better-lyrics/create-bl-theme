@@ -43,13 +43,29 @@ Checks that your theme has all required files and valid metadata.
 
 ```
 my-theme/
-├── metadata.json   # Theme metadata (required)
-├── style.css       # Your CSS styles (required)
-├── shader.json     # Shader config (if enabled)
-├── README.md       # Theme documentation
-└── images/         # Screenshots (required)
+├── metadata.json    # Theme metadata (required)
+├── style.css        # Your CSS styles (required)
+├── DESCRIPTION.md   # Rich description (optional, takes precedence)
+├── shader.json      # Shader config (if enabled)
+├── README.md        # Theme documentation
+└── images/          # Screenshots (required)
     └── preview.png
 ```
+
+### Theme Description Options
+
+You can provide your theme description in two ways:
+
+1. **`description` field in metadata.json** - Simple, inline description for basic themes
+2. **`DESCRIPTION.md` file** - For richer descriptions with formatting (recommended for longer descriptions)
+
+If both exist, `DESCRIPTION.md` takes precedence. At least one must be present.
+
+Better Lyrics supports **GitHub Flavored Markdown (GFM)** in DESCRIPTION.md, so you can use:
+- **Bold**, *italic*, and other text formatting
+- [Links](https://example.com) and images
+- Lists, tables, and code blocks
+- Any other GFM features
 
 ## Theme Development
 

@@ -82,6 +82,12 @@ async function create(targetDir) {
       initial: "A custom theme for Better Lyrics",
     },
     {
+      type: "confirm",
+      name: "useDescriptionFile",
+      message: "Use DESCRIPTION.md for richer formatting? (recommended for longer descriptions)",
+      initial: false,
+    },
+    {
       type: "text",
       name: "creator",
       message: "Your GitHub username:",
@@ -138,7 +144,6 @@ async function create(targetDir) {
   const metadata = {
     id: response.id,
     title: response.title,
-    description: response.description,
     creators: [response.creator],
     minVersion: "2.0.5.6",
     hasShaders: response.hasShaders,
@@ -147,10 +152,54 @@ async function create(targetDir) {
     images: ["preview.png"],
   };
 
+  // Only include description in metadata.json if not using DESCRIPTION.md
+  if (!response.useDescriptionFile) {
+    metadata.description = response.description;
+  }
+
   fs.writeFileSync(
     path.join(fullPath, "metadata.json"),
     JSON.stringify(metadata, null, 2)
   );
+
+  // Create DESCRIPTION.md if user opted for it
+  if (response.useDescriptionFile) {
+    const descriptionMd = `<!--
+  Better Lyrics supports GitHub Flavored Markdown (GFM) for theme descriptions.
+  You can use all standard GFM features including:
+  - **Bold** and *italic* text
+  - [Links](https://example.com)
+  - Images: ![alt text](https://example.com/image.png)
+  - Lists (ordered and unordered)
+  - Code blocks with syntax highlighting
+  - Tables
+  - And more!
+
+  This file takes precedence over the "description" field in metadata.json.
+  Delete this comment block when you're ready to publish.
+-->
+
+## Features
+
+- Add your theme features here
+- Describe what makes your theme special
+- Use **bold** for emphasis on key points
+
+## Preview
+
+<!-- You can embed images directly in your description -->
+<!-- ![Theme Preview](https://your-image-url.png) -->
+
+## Installation Notes
+
+Any special instructions for using this theme.
+
+## Compatibility
+
+- Works with Better Lyrics v2.0.5.6+
+`;
+    fs.writeFileSync(path.join(fullPath, "DESCRIPTION.md"), descriptionMd);
+  }
 
   // Create style.css from template
   const cssTemplate = fs.readFileSync(
@@ -205,12 +254,17 @@ MIT
   console.log(
     `  ${pc.dim("3.")} Add a preview screenshot to ${pc.cyan("images/preview.png")}`
   );
-  if (response.hasShaders) {
-    console.log(`  ${pc.dim("4.")} Configure ${pc.cyan("shader.json")} for shader effects`);
+  let stepNum = 4;
+  if (response.useDescriptionFile) {
+    console.log(`  ${pc.dim(`${stepNum}.`)} Edit ${pc.cyan("DESCRIPTION.md")} with your theme description`);
+    stepNum++;
   }
-  const submitStep = response.hasShaders ? "5." : "4.";
+  if (response.hasShaders) {
+    console.log(`  ${pc.dim(`${stepNum}.`)} Configure ${pc.cyan("shader.json")} for shader effects`);
+    stepNum++;
+  }
   console.log(
-    `  ${pc.dim(submitStep)} Push to GitHub and submit to the theme store`
+    `  ${pc.dim(`${stepNum}.`)} Push to GitHub and submit to the theme store`
   );
   console.log(
     `      ${pc.dim("https://github.com/boidushya/better-lyrics-themes")}`
@@ -235,6 +289,10 @@ async function validate(dir) {
     process.exit(1);
   }
 
+  // Check for DESCRIPTION.md
+  const descriptionMdPath = path.join(fullPath, "DESCRIPTION.md");
+  const hasDescriptionMd = fs.existsSync(descriptionMdPath);
+
   // Check metadata.json
   const metadataPath = path.join(fullPath, "metadata.json");
   if (!fs.existsSync(metadataPath)) {
@@ -245,7 +303,6 @@ async function validate(dir) {
       const required = [
         "id",
         "title",
-        "description",
         "creators",
         "minVersion",
         "hasShaders",
@@ -256,6 +313,20 @@ async function validate(dir) {
       for (const field of required) {
         if (metadata[field] === undefined) {
           errors.push(`metadata.json: missing required field "${field}"`);
+        }
+      }
+
+      // Check for description: either in metadata.json OR in DESCRIPTION.md
+      if (!metadata.description && !hasDescriptionMd) {
+        errors.push(
+          'Missing description: add "description" field in metadata.json or create DESCRIPTION.md'
+        );
+      }
+
+      if (hasDescriptionMd) {
+        const descContent = fs.readFileSync(descriptionMdPath, "utf-8").trim();
+        if (descContent.length === 0) {
+          errors.push("DESCRIPTION.md exists but is empty");
         }
       }
 
