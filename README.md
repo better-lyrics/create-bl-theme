@@ -42,7 +42,8 @@ create-bl-theme validate https://github.com/username/theme-repo
 ```
 
 The validator checks:
-- Required files (metadata.json, style.css, images/)
+- Required files (metadata.json, style.rics or style.css, images/)
+- RICS syntax validation (for .rics files)
 - Valid JSON structure and required fields
 - Image integrity (detects corrupted files)
 - Image dimensions (recommends 1280x720, but other sizes work fine)
@@ -52,13 +53,40 @@ The validator checks:
 ```
 my-theme/
 ├── metadata.json    # Theme metadata (required)
-├── style.css        # Your CSS styles (required)
+├── style.rics       # Your styles in RICS format (required)
 ├── DESCRIPTION.md   # Rich description (optional, takes precedence)
 ├── shader.json      # Shader config (if enabled)
 ├── README.md        # Theme documentation
 └── images/          # Screenshots (required)
     └── preview.png
 ```
+
+## RICS
+
+Themes use [RICS](https://github.com/better-lyrics/rics) - a lightweight CSS preprocessor with full CSS parity. RICS adds variables, nesting, and mixins while staying close to standard CSS.
+
+**Any valid CSS is also valid RICS**, so you can write plain CSS if you prefer.
+
+```scss
+$accent: #ff6b6b;
+
+.lyrics-container {
+  background: rgba(0, 0, 0, 0.8);
+
+  .lyrics-line {
+    color: $accent;
+
+    &.active {
+      font-weight: bold;
+    }
+  }
+}
+```
+
+- **Playground:** https://rics.boidu.dev
+- **RICS Docs:** https://github.com/better-lyrics/rics
+
+> **Note:** Both `.rics` and `.css` files are supported. The validator prefers `.rics` if both exist.
 
 ### Theme Description Options
 
@@ -77,7 +105,7 @@ Better Lyrics supports **GitHub Flavored Markdown (GFM)** in DESCRIPTION.md, so 
 
 ## Theme Development
 
-1. **Edit `style.css`** - Add your custom styles. Use browser DevTools to inspect Better Lyrics elements and find the right selectors.
+1. **Edit `style.rics`** - Add your custom styles using RICS or plain CSS. Use browser DevTools to inspect Better Lyrics elements and find the right selectors.
 
 2. **Add screenshots** - Place at least one preview image in `images/`. Recommended size: 1280x720 (16:9 aspect ratio).
 
@@ -85,10 +113,13 @@ Better Lyrics supports **GitHub Flavored Markdown (GFM)** in DESCRIPTION.md, so 
 
 4. **Test locally** - Install your theme via "Install from URL" in Better Lyrics using your local path or GitHub repo URL.
 
+**Resources:**
+- [Styling Guide](https://github.com/better-lyrics/better-lyrics/blob/master/STYLING.md) - Available selectors and styling reference
+
 ## Submitting to Theme Store
 
 1. Push your theme to a GitHub repository
-2. Fork [better-lyrics-themes](https://github.com/better-lyrics/better-lyrics-themes)
+2. Fork [themes](https://github.com/better-lyrics/themes)
 3. Add your theme to `index.json`:
    ```json
    {

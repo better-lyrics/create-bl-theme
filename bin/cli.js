@@ -8,6 +8,7 @@ import os from "os";
 import { fileURLToPath } from "url";
 import { imageSize } from "image-size";
 import { execSync } from "child_process";
+import { compileWithDetails } from "rics";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -212,12 +213,12 @@ Any special instructions for using this theme.
     fs.writeFileSync(path.join(fullPath, "DESCRIPTION.md"), descriptionMd);
   }
 
-  // Create style.css from template
-  const cssTemplate = fs.readFileSync(
-    path.join(TEMPLATES_DIR, "style.css"),
+  // Create style.rics from template
+  const ricsTemplate = fs.readFileSync(
+    path.join(TEMPLATES_DIR, "style.rics"),
     "utf-8"
   );
-  fs.writeFileSync(path.join(fullPath, "style.css"), cssTemplate);
+  fs.writeFileSync(path.join(fullPath, "style.rics"), ricsTemplate);
 
   // Create shader.json if needed
   if (response.hasShaders) {
@@ -261,7 +262,7 @@ MIT
   console.log();
   console.log(pc.bold("  Next steps:"));
   console.log(`  ${pc.dim("1.")} cd ${dir}`);
-  console.log(`  ${pc.dim("2.")} Edit ${pc.cyan("style.css")} with your theme styles`);
+  console.log(`  ${pc.dim("2.")} Edit ${pc.cyan("style.rics")} with your theme styles`);
   console.log(
     `  ${pc.dim("3.")} Add a preview screenshot to ${pc.cyan("images/preview.png")}`
   );
@@ -277,9 +278,15 @@ MIT
   console.log(
     `  ${pc.dim(`${stepNum}.`)} Push to GitHub and submit to the theme store`
   );
-  console.log(
-    `      ${pc.dim("https://github.com/boidushya/better-lyrics-themes")}`
-  );
+  console.log();
+  console.log(pc.bold("  Resources:"));
+  console.log(`  ${pc.cyan("RICS")} is a lightweight CSS preprocessor with full CSS parity.`);
+  console.log(`  It adds variables, nesting, and mixins - but plain CSS works too!`);
+  console.log();
+  console.log(`  ${pc.dim("Playground:")}     https://rics.boidu.dev`);
+  console.log(`  ${pc.dim("RICS Docs:")}      https://github.com/better-lyrics/rics`);
+  console.log(`  ${pc.dim("Styling Guide:")}  https://github.com/better-lyrics/better-lyrics/blob/master/STYLING.md`);
+  console.log(`  ${pc.dim("Submit Theme:")}   https://github.com/better-lyrics/themes`);
   console.log();
   console.log(
     pc.dim("  Validate your theme with: ") + pc.cyan(`npx create-bl-theme@latest validate ${dir}`)
@@ -411,12 +418,41 @@ async function validate(dir) {
     }
   }
 
-  // Check style.css
-  const stylePath = path.join(fullPath, "style.css");
-  if (!fs.existsSync(stylePath)) {
-    errors.push("style.css is missing");
-  } else {
-    const css = fs.readFileSync(stylePath, "utf-8");
+  // Check for style.rics or style.css (prefer .rics)
+  const ricsPath = path.join(fullPath, "style.rics");
+  const cssPath = path.join(fullPath, "style.css");
+  const hasRics = fs.existsSync(ricsPath);
+  const hasCss = fs.existsSync(cssPath);
+
+  if (!hasRics && !hasCss) {
+    errors.push("Missing required file: style.rics or style.css");
+  } else if (hasRics) {
+    const ricsSource = fs.readFileSync(ricsPath, "utf-8");
+    if (ricsSource.trim().length === 0) {
+      warnings.push("style.rics is empty");
+    } else {
+      // Validate RICS syntax
+      try {
+        const result = compileWithDetails(ricsSource);
+        if (result.errors && result.errors.length > 0) {
+          for (const err of result.errors) {
+            const location = err.start
+              ? ` (line ${err.start.line}, column ${err.start.column})`
+              : "";
+            errors.push(`style.rics: ${err.message}${location}`);
+          }
+        }
+        if (result.warnings && result.warnings.length > 0) {
+          for (const warn of result.warnings) {
+            warnings.push(`style.rics: ${warn.message || warn}`);
+          }
+        }
+      } catch (e) {
+        errors.push(`style.rics: Failed to compile - ${e.message}`);
+      }
+    }
+  } else if (hasCss) {
+    const css = fs.readFileSync(cssPath, "utf-8");
     if (css.trim().length === 0) {
       warnings.push("style.css is empty");
     }

@@ -1,0 +1,11 @@
+/*
+ * Better Lyrics Theme
+ *
+ * This file uses RICS - a lightweight CSS preprocessor with full CSS parity.
+ * RICS adds variables, nesting, and mixins while staying close to standard CSS.
+ * Any valid CSS is also valid RICS, so you can write plain CSS if you prefer.
+ *
+ * RICS Playground: https://rics.boidu.dev
+ * RICS Docs:       https://github.com/better-lyrics/rics
+ * Styling Guide:   https://github.com/better-lyrics/better-lyrics/blob/master/STYLING.md
+ */
