@@ -36,6 +36,11 @@ async function main() {
     return;
   }
 
+  if (command === "publish") {
+    await publish(args[1] || ".");
+    return;
+  }
+
   if (command === "help" || command === "--help" || command === "-h") {
     showHelp();
     return;
@@ -48,11 +53,26 @@ function showHelp() {
   console.log(`${pc.bold("Usage:")}
   ${pc.cyan("create-bl-theme")} [name]              Create a new theme
   ${pc.cyan("create-bl-theme")} validate [dir|url]  Validate a theme (local or GitHub)
+  ${pc.cyan("create-bl-theme")} publish [dir]       Check publishing status
 
 ${pc.bold("Examples:")}
   ${pc.dim("$")} create-bl-theme my-awesome-theme
   ${pc.dim("$")} create-bl-theme validate ./my-theme
   ${pc.dim("$")} create-bl-theme validate https://github.com/user/theme-repo
+  ${pc.dim("$")} create-bl-theme publish
+
+${pc.bold("Theme Structure:")}
+  my-theme/
+  ├── metadata.json        ${pc.dim("# Required - Theme metadata")}
+  ├── style.rics           ${pc.dim("# Required - Styles (or style.css)")}
+  ├── shader.json          ${pc.dim("# Optional - If hasShaders: true")}
+  ├── DESCRIPTION.md       ${pc.dim("# Optional - Rich description")}
+  ├── cover.png            ${pc.dim("# Optional - Cover image")}
+  └── images/              ${pc.dim("# Required - Screenshots")}
+      └── preview.png
+
+${pc.bold("Documentation:")}
+  ${pc.cyan("https://github.com/better-lyrics/themes")}
 `);
 }
 
@@ -369,6 +389,16 @@ async function validate(dir) {
         }
       }
 
+      // Validate version format (semver)
+      if (metadata.version) {
+        const semverRegex = /^\d+\.\d+\.\d+(-[\w.]+)?(\+[\w.]+)?$/;
+        if (!semverRegex.test(metadata.version)) {
+          errors.push(
+            `metadata.json: invalid version format "${metadata.version}". Must be semver (e.g., 1.0.0, 1.0.0-beta.1)`
+          );
+        }
+      }
+
       // Check for description: either in metadata.json OR in DESCRIPTION.md
       if (!metadata.description && !hasDescriptionMd) {
         errors.push(
@@ -525,6 +555,21 @@ async function validate(dir) {
     }
   }
 
+  // Check for cover image (cover.png or first image in images array)
+  if (fs.existsSync(metadataPath)) {
+    try {
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8"));
+      const hasCoverPng = fs.existsSync(path.join(fullPath, "cover.png"));
+      const hasImagesArray = metadata.images && metadata.images.length > 0;
+
+      if (!hasCoverPng && !hasImagesArray) {
+        warnings.push("No cover image found. Add cover.png or images to the images/ folder.");
+      }
+    } catch (e) {
+      // Already reported JSON error above
+    }
+  }
+
   // Print results
   if (errors.length === 0 && warnings.length === 0) {
     console.log(pc.green("  All checks passed!"));
@@ -556,6 +601,185 @@ async function validate(dir) {
 
   if (errors.length > 0) {
     process.exit(1);
+  }
+}
+
+async function publish(dir) {
+  const fullPath = path.resolve(process.cwd(), dir);
+
+  console.log(pc.dim(`Checking theme for publishing...\n`));
+
+  // Check directory exists
+  if (!fs.existsSync(fullPath)) {
+    console.log(pc.red(`Error: Directory "${dir}" does not exist.`));
+    process.exit(1);
+  }
+
+  // 1. Validate theme first (simple check, not full validation)
+  const metadataPath = path.join(fullPath, "metadata.json");
+  if (!fs.existsSync(metadataPath)) {
+    console.log(pc.red("Error: metadata.json not found."));
+    console.log(pc.dim("Run validation first: create-bl-theme validate"));
+    process.exit(1);
+  }
+
+  let metadata;
+  try {
+    metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8"));
+  } catch (e) {
+    console.log(pc.red(`Error: Invalid metadata.json - ${e.message}`));
+    process.exit(1);
+  }
+
+  // 2. Check git repo
+  if (!checkIsGitRepo(fullPath)) {
+    console.log(pc.red("Not a git repository. Initialize git first:"));
+    console.log(pc.dim("  git init"));
+    console.log(pc.dim("  git remote add origin https://github.com/username/theme-name.git"));
+    process.exit(1);
+  }
+
+  // 3. Get remote info
+  const remote = getGitRemote(fullPath);
+  if (!remote) {
+    console.log(pc.red("No git remote found. Add a remote:"));
+    console.log(pc.dim("  git remote add origin https://github.com/username/theme-name.git"));
+    process.exit(1);
+  }
+
+  // 4. Parse repo from remote
+  const repoMatch = remote.match(/github\.com[:/](.+?)(?:\.git)?$/);
+  if (!repoMatch) {
+    console.log(pc.red("Could not parse GitHub repo from remote:"), remote);
+    process.exit(1);
+  }
+  const repo = repoMatch[1].replace(/\.git$/, "");
+
+  // 5. Display theme info
+  console.log(pc.bold("Theme Info:"));
+  console.log(`  ID:      ${metadata.id}`);
+  console.log(`  Title:   ${metadata.title}`);
+  console.log(`  Version: ${metadata.version}`);
+  console.log(`  Repo:    ${repo}`);
+  console.log();
+
+  // 6. Check if registered
+  const isRegistered = await checkThemeRegistered(repo);
+
+  if (!isRegistered) {
+    console.log(pc.yellow("Theme is not registered in the theme store."));
+    console.log();
+    console.log(pc.bold("To register your theme:"));
+    console.log("  1. Fork https://github.com/better-lyrics/themes");
+    console.log(`  2. Add { "repo": "${repo}" } to index.json`);
+    console.log("  3. Open a pull request");
+    console.log();
+    console.log("After your PR is merged, install the GitHub App for auto-updates:");
+    console.log(pc.cyan("  https://github.com/marketplace/better-lyrics-themes"));
+    process.exit(0);
+  }
+
+  // 7. Theme is registered
+  console.log(pc.green("Theme is registered in the theme store."));
+  console.log();
+  console.log(pc.bold("Auto-publishing Setup:"));
+  console.log();
+  console.log("To enable automatic updates when you push:");
+  console.log("  1. Install the GitHub App on your repo:");
+  console.log(pc.cyan("     https://github.com/marketplace/better-lyrics-themes"));
+  console.log();
+  console.log("  2. Push changes to your repo:");
+  console.log(pc.dim("     git add ."));
+  console.log(pc.dim('     git commit -m "feat: update theme"'));
+  console.log(pc.dim("     git push"));
+  console.log();
+  console.log("The registry will automatically:");
+  console.log("  - Validate your theme");
+  console.log("  - Update the lockfile");
+  console.log("  - Vendor your theme files");
+  console.log("  - Show a commit status on your push");
+  console.log();
+
+  // 8. Check current lockfile status
+  const lockStatus = await checkLockStatus(repo);
+  if (lockStatus) {
+    console.log(pc.bold("Current Registry Status:"));
+    console.log(`  Locked Version: ${lockStatus.version}`);
+    console.log(`  Locked At:      ${lockStatus.locked}`);
+    console.log(`  Commit:         ${lockStatus.commit.slice(0, 7)}`);
+
+    if (metadata.version === lockStatus.version) {
+      console.log();
+      console.log(pc.yellow("Your local version matches the registry."));
+      console.log("Bump the version in metadata.json to publish an update.");
+    } else {
+      // Compare versions
+      const localParts = metadata.version.split(".").map(Number);
+      const remoteParts = lockStatus.version.split(".").map(Number);
+      let isGreater = false;
+
+      for (let i = 0; i < 3; i++) {
+        if (localParts[i] > remoteParts[i]) {
+          isGreater = true;
+          break;
+        } else if (localParts[i] < remoteParts[i]) {
+          break;
+        }
+      }
+
+      if (isGreater) {
+        console.log();
+        console.log(pc.green(`Ready to publish: ${lockStatus.version} -> ${metadata.version}`));
+        console.log("Push to your repo to trigger an update.");
+      } else {
+        console.log();
+        console.log(pc.red(`Version ${metadata.version} is not greater than ${lockStatus.version}`));
+        console.log("Versions must increase. Update metadata.json with a higher version.");
+      }
+    }
+  }
+
+  console.log();
+}
+
+function checkIsGitRepo(themePath) {
+  try {
+    execSync("git rev-parse --git-dir", { cwd: themePath, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getGitRemote(themePath) {
+  try {
+    return execSync("git remote get-url origin", { cwd: themePath, encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function checkThemeRegistered(repo) {
+  try {
+    const response = await fetch(
+      "https://raw.githubusercontent.com/better-lyrics/themes/main/index.json"
+    );
+    const index = await response.json();
+    return index.themes?.some((t) => t.repo === repo) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+async function checkLockStatus(repo) {
+  try {
+    const response = await fetch(
+      "https://raw.githubusercontent.com/better-lyrics/themes/main/index.lock.json"
+    );
+    const lock = await response.json();
+    return lock.themes?.find((t) => t.repo === repo) ?? null;
+  } catch {
+    return null;
   }
 }
 
