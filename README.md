@@ -45,8 +45,40 @@ The validator checks:
 - Required files (metadata.json, style.rics or style.css, images/)
 - RICS syntax validation (for .rics files)
 - Valid JSON structure and required fields
+- Semver version format
 - Image integrity (detects corrupted files)
 - Image dimensions (recommends 1280x720, but other sizes work fine)
+
+### Bump version
+
+```bash
+# Bump patch version (1.0.0 → 1.0.1)
+create-bl-theme bump patch
+
+# Bump minor version (1.0.0 → 1.1.0)
+create-bl-theme bump minor
+
+# Bump major version (1.0.0 → 2.0.0)
+create-bl-theme bump major
+
+# Bump in a specific directory
+create-bl-theme bump patch ./my-theme
+```
+
+### Check publishing status
+
+```bash
+# Check if theme is registered and ready to publish
+create-bl-theme publish
+
+# Check a specific directory
+create-bl-theme publish ./my-theme
+```
+
+The publish command:
+- Checks if your theme is registered in the theme store
+- Shows your current version vs. the registry version
+- Provides setup instructions for auto-publishing
 
 ## Generated Structure
 
@@ -129,6 +161,16 @@ Better Lyrics supports **GitHub Flavored Markdown (GFM)** in DESCRIPTION.md, so 
    }
    ```
 4. Open a pull request
+
+### Auto-Publishing
+
+After your theme is registered, install the [Better Lyrics Themes](https://github.com/marketplace/better-lyrics-themes) GitHub App on your repo. This enables automatic updates:
+
+1. Bump your version: `create-bl-theme bump patch`
+2. Commit and push
+3. The registry automatically validates and publishes your update
+
+Use `create-bl-theme publish` to check your publishing status.
 
 ## License
 

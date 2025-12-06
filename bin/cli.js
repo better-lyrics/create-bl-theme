@@ -41,6 +41,11 @@ async function main() {
     return;
   }
 
+  if (command === "bump") {
+    await bump(args[1], args[2]);
+    return;
+  }
+
   if (command === "help" || command === "--help" || command === "-h") {
     showHelp();
     return;
@@ -54,12 +59,15 @@ function showHelp() {
   ${pc.cyan("create-bl-theme")} [name]              Create a new theme
   ${pc.cyan("create-bl-theme")} validate [dir|url]  Validate a theme (local or GitHub)
   ${pc.cyan("create-bl-theme")} publish [dir]       Check publishing status
+  ${pc.cyan("create-bl-theme")} bump [type] [dir]   Bump version (patch, minor, major)
 
 ${pc.bold("Examples:")}
   ${pc.dim("$")} create-bl-theme my-awesome-theme
   ${pc.dim("$")} create-bl-theme validate ./my-theme
   ${pc.dim("$")} create-bl-theme validate https://github.com/user/theme-repo
   ${pc.dim("$")} create-bl-theme publish
+  ${pc.dim("$")} create-bl-theme bump patch
+  ${pc.dim("$")} create-bl-theme bump minor ./my-theme
 
 ${pc.bold("Theme Structure:")}
   my-theme/
@@ -786,6 +794,90 @@ async function checkLockStatus(repo) {
   } catch {
     return null;
   }
+}
+
+async function bump(typeOrDir, dirArg) {
+  // Handle flexible argument order: bump [type] [dir] or bump [dir]
+  let type = "patch";
+  let dir = ".";
+
+  const validTypes = ["patch", "minor", "major"];
+
+  if (typeOrDir) {
+    if (validTypes.includes(typeOrDir)) {
+      type = typeOrDir;
+      dir = dirArg || ".";
+    } else {
+      // Assume it's a directory
+      dir = typeOrDir;
+    }
+  }
+
+  const fullPath = path.resolve(process.cwd(), dir);
+  const metadataPath = path.join(fullPath, "metadata.json");
+
+  // Check metadata.json exists
+  if (!fs.existsSync(metadataPath)) {
+    console.log(pc.red("Error: metadata.json not found."));
+    process.exit(1);
+  }
+
+  let metadata;
+  try {
+    metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8"));
+  } catch (e) {
+    console.log(pc.red(`Error: Invalid metadata.json - ${e.message}`));
+    process.exit(1);
+  }
+
+  const currentVersion = metadata.version;
+  if (!currentVersion) {
+    console.log(pc.red("Error: No version field in metadata.json"));
+    process.exit(1);
+  }
+
+  // Parse current version
+  const match = currentVersion.match(/^(\d+)\.(\d+)\.(\d+)(.*)$/);
+  if (!match) {
+    console.log(pc.red(`Error: Invalid version format "${currentVersion}"`));
+    process.exit(1);
+  }
+
+  let [, major, minor, patch, prerelease] = match;
+  major = parseInt(major, 10);
+  minor = parseInt(minor, 10);
+  patch = parseInt(patch, 10);
+
+  // Bump version
+  switch (type) {
+    case "major":
+      major++;
+      minor = 0;
+      patch = 0;
+      prerelease = "";
+      break;
+    case "minor":
+      minor++;
+      patch = 0;
+      prerelease = "";
+      break;
+    case "patch":
+    default:
+      patch++;
+      prerelease = "";
+      break;
+  }
+
+  const newVersion = `${major}.${minor}.${patch}`;
+  metadata.version = newVersion;
+
+  // Write back
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + "\n");
+
+  console.log(pc.green(`  ${currentVersion} → ${newVersion}`));
+  console.log();
+  console.log(pc.dim(`  Updated ${metadataPath}`));
+  console.log();
 }
 
 main().catch((err) => {
