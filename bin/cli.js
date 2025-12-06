@@ -762,11 +762,16 @@ function getGitRemote(themePath) {
 async function checkThemeRegistered(repo) {
   try {
     const response = await fetch(
-      "https://raw.githubusercontent.com/better-lyrics/themes/main/index.json"
+      "https://raw.githubusercontent.com/better-lyrics/themes/master/index.json"
     );
+    if (!response.ok) {
+      console.log(pc.dim(`  (Could not fetch registry: ${response.status})`));
+      return false;
+    }
     const index = await response.json();
     return index.themes?.some((t) => t.repo === repo) ?? false;
-  } catch {
+  } catch (e) {
+    console.log(pc.dim(`  (Could not fetch registry: ${e.message})`));
     return false;
   }
 }
@@ -774,7 +779,7 @@ async function checkThemeRegistered(repo) {
 async function checkLockStatus(repo) {
   try {
     const response = await fetch(
-      "https://raw.githubusercontent.com/better-lyrics/themes/main/index.lock.json"
+      "https://raw.githubusercontent.com/better-lyrics/themes/master/index.lock.json"
     );
     const lock = await response.json();
     return lock.themes?.find((t) => t.repo === repo) ?? null;
