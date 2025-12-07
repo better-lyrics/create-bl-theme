@@ -22,12 +22,28 @@ const RECOMMENDED_HEIGHT = 720;
 // GitHub URL patterns
 const GITHUB_URL_PATTERN = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)(?:\/)?(?:\.git)?$/;
 
+// Load package.json for version
+const pkg = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8")
+);
+
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
 
+  // Handle flags first (no banner)
+  if (command === "--version" || command === "-v" || command === "version") {
+    console.log(pkg.version);
+    return;
+  }
+
+  if (command === "--help" || command === "-h" || command === "help") {
+    showHelp();
+    return;
+  }
+
   console.log();
-  console.log(pc.bold(pc.cyan("  Better Lyrics Theme Creator")));
+  console.log(pc.bold(pc.cyan("  Better Lyrics Theme Creator")) + pc.dim(` v${pkg.version}`));
   console.log(pc.dim("  Create themes for Better Lyrics extension"));
   console.log();
 
@@ -46,20 +62,23 @@ async function main() {
     return;
   }
 
-  if (command === "help" || command === "--help" || command === "-h") {
-    showHelp();
-    return;
-  }
-
   await create(command);
 }
 
 function showHelp() {
-  console.log(`${pc.bold("Usage:")}
+  console.log(`
+${pc.bold(pc.cyan("create-bl-theme"))} ${pc.dim(`v${pkg.version}`)}
+CLI for Better Lyrics themes
+
+${pc.bold("Usage:")}
   ${pc.cyan("create-bl-theme")} [name]              Create a new theme
   ${pc.cyan("create-bl-theme")} validate [dir|url]  Validate a theme (local or GitHub)
   ${pc.cyan("create-bl-theme")} publish [dir]       Check publishing status
   ${pc.cyan("create-bl-theme")} bump [type] [dir]   Bump version (patch, minor, major)
+
+${pc.bold("Options:")}
+  ${pc.cyan("-v, --version")}  Show version number
+  ${pc.cyan("-h, --help")}     Show this help message
 
 ${pc.bold("Examples:")}
   ${pc.dim("$")} create-bl-theme my-awesome-theme
