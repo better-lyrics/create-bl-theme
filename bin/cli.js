@@ -7,7 +7,7 @@ import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 import { imageSize } from "image-size";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { compileWithDetails } from "rics";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,10 +22,77 @@ const RECOMMENDED_HEIGHT = 720;
 // GitHub URL patterns
 const GITHUB_URL_PATTERN = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)(?:\/)?(?:\.git)?$/;
 
+// GitHub App URL for auto-updates
+const GITHUB_APP_URL = "https://github.com/apps/better-lyrics-harmonizer/installations/new";
+
 // Load package.json for version
 const pkg = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8")
 );
+
+// Cross-platform browser opener
+function openBrowser(url) {
+  const platform = process.platform;
+  let command;
+  let args;
+
+  if (platform === "darwin") {
+    command = "open";
+    args = [url];
+  } else if (platform === "win32") {
+    command = "cmd";
+    args = ["/c", "start", "", url];
+  } else {
+    command = "xdg-open";
+    args = [url];
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: "ignore",
+    });
+
+    child.on("error", (err) => {
+      reject(err);
+    });
+
+    child.unref();
+    resolve();
+  });
+}
+
+// Prompt to install GitHub App for auto-updates
+async function promptGitHubAppInstall() {
+  console.log();
+  console.log(pc.bold("GitHub App Installation"));
+  console.log();
+  console.log("Install Better Lyrics Harmonizer for automatic theme publishing.");
+  console.log(pc.dim("This is a one-time setup. After installing, push changes with a bumped"));
+  console.log(pc.dim("version and they'll auto-publish to the theme store (with commit status)."));
+  console.log();
+
+  const response = await prompts({
+    type: "confirm",
+    name: "openBrowser",
+    message: "Open browser to install Better Lyrics Harmonizer?",
+    initial: true,
+  });
+
+  if (response.openBrowser) {
+    try {
+      await openBrowser(GITHUB_APP_URL);
+      console.log(pc.green("  Browser opened!"));
+    } catch (err) {
+      console.log(pc.yellow("  Could not open browser automatically."));
+    }
+  }
+
+  console.log();
+  console.log(pc.dim("  Install URL:"));
+  console.log(pc.cyan(`  ${GITHUB_APP_URL}`));
+  console.log();
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -617,6 +684,11 @@ async function validate(dir) {
 
   console.log();
 
+  // Prompt to install GitHub App if validation passed
+  if (errors.length === 0) {
+    await promptGitHubAppInstall();
+  }
+
   // Cleanup temp directory if we cloned from GitHub
   if (tempDir) {
     try {
@@ -701,30 +773,23 @@ async function publish(dir) {
     console.log(`  2. Add { "repo": "${repo}" } to index.json`);
     console.log("  3. Open a pull request");
     console.log();
-    console.log("After your PR is merged, install the GitHub App for auto-updates:");
-    console.log(pc.cyan("  https://github.com/marketplace/better-lyrics-themes"));
+    console.log(pc.dim("After your PR is merged, install the GitHub App for auto-updates:"));
+    await promptGitHubAppInstall();
     process.exit(0);
   }
 
   // 7. Theme is registered
   console.log(pc.green("Theme is registered in the theme store."));
   console.log();
-  console.log(pc.bold("Auto-publishing Setup:"));
-  console.log();
-  console.log("To enable automatic updates when you push:");
-  console.log("  1. Install the GitHub App on your repo:");
-  console.log(pc.cyan("     https://github.com/marketplace/better-lyrics-themes"));
-  console.log();
-  console.log("  2. Push changes to your repo:");
-  console.log(pc.dim("     git add ."));
-  console.log(pc.dim('     git commit -m "feat: update theme"'));
-  console.log(pc.dim("     git push"));
+  console.log(pc.bold("To publish updates:"));
+  console.log(pc.dim("  git add ."));
+  console.log(pc.dim('  git commit -m "feat: update theme"'));
+  console.log(pc.dim("  git push"));
   console.log();
   console.log("The registry will automatically:");
   console.log("  - Validate your theme");
   console.log("  - Update the lockfile");
   console.log("  - Vendor your theme files");
-  console.log("  - Show a commit status on your push");
   console.log();
 
   // 8. Check current lockfile status
@@ -766,7 +831,8 @@ async function publish(dir) {
     }
   }
 
-  console.log();
+  // Prompt to install GitHub App for auto-updates
+  await promptGitHubAppInstall();
 }
 
 function checkIsGitRepo(themePath) {
