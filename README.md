@@ -164,7 +164,7 @@ Better Lyrics supports **GitHub Flavored Markdown (GFM)** in DESCRIPTION.md, so 
 
 ### Auto-Publishing
 
-After your theme is registered, install the [Better Lyrics Themes](https://github.com/marketplace/better-lyrics-themes) GitHub App on your repo. This enables automatic updates:
+After your theme is registered, install the [Better Lyrics Harmonizer](https://github.com/apps/better-lyrics-harmonizer/installations/new) GitHub App on your repo. This enables automatic updates:
 
 1. Bump your version: `create-bl-theme bump patch`
 2. Commit and push
