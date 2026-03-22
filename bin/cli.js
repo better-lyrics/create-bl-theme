@@ -170,7 +170,28 @@ ${pc.bold("Documentation:")}
 `);
 }
 
+function isDirectoryEmpty(dirPath) {
+  const entries = fs.readdirSync(dirPath);
+  return entries.every((entry) => entry.startsWith("."));
+}
+
 async function create(targetDir) {
+  if (targetDir) {
+    const earlyPath = path.resolve(process.cwd(), targetDir);
+    if (fs.existsSync(earlyPath) && !isDirectoryEmpty(earlyPath)) {
+      const { proceed } = await prompts({
+        type: "confirm",
+        name: "proceed",
+        message: `Directory "${targetDir}" is not empty. Continue anyway? (files may be overwritten)`,
+        initial: false,
+      });
+      if (!proceed) {
+        console.log(pc.red("\nCancelled."));
+        process.exit(1);
+      }
+    }
+  }
+
   const questions = [
     {
       type: targetDir ? null : "text",
@@ -254,9 +275,17 @@ async function create(targetDir) {
   const dir = targetDir || response.directory;
   const fullPath = path.resolve(process.cwd(), dir);
 
-  if (fs.existsSync(fullPath)) {
-    console.log(pc.red(`\nError: Directory "${dir}" already exists.`));
-    process.exit(1);
+  if (!targetDir && fs.existsSync(fullPath) && !isDirectoryEmpty(fullPath)) {
+    const { proceed } = await prompts({
+      type: "confirm",
+      name: "proceed",
+      message: `Directory "${dir}" is not empty. Continue anyway? (files may be overwritten)`,
+      initial: false,
+    });
+    if (!proceed) {
+      console.log(pc.red("\nCancelled."));
+      process.exit(1);
+    }
   }
 
   console.log();
@@ -375,12 +404,17 @@ MIT
   console.log(pc.green("  Theme scaffolded successfully!"));
   console.log();
   console.log(pc.bold("  Next steps:"));
-  console.log(`  ${pc.dim("1.")} cd ${dir}`);
-  console.log(`  ${pc.dim("2.")} Edit ${pc.cyan("style.rics")} with your theme styles`);
+  let stepNum = 1;
+  if (dir !== ".") {
+    console.log(`  ${pc.dim(`${stepNum}.`)} cd ${dir}`);
+    stepNum++;
+  }
+  console.log(`  ${pc.dim(`${stepNum}.`)} Edit ${pc.cyan("style.rics")} with your theme styles`);
+  stepNum++;
   console.log(
-    `  ${pc.dim("3.")} Add a preview screenshot to ${pc.cyan("images/preview.png")}`
+    `  ${pc.dim(`${stepNum}.`)} Add a preview screenshot to ${pc.cyan("images/preview.png")}`
   );
-  let stepNum = 4;
+  stepNum++;
   if (response.useDescriptionFile) {
     console.log(`  ${pc.dim(`${stepNum}.`)} Edit ${pc.cyan("DESCRIPTION.md")} with your theme description`);
     stepNum++;
