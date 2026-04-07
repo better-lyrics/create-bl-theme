@@ -394,6 +394,11 @@ MIT
 `;
   fs.writeFileSync(path.join(fullPath, "README.md"), readme);
 
+  fs.writeFileSync(
+    path.join(fullPath, ".gitattributes"),
+    "*.rics linguist-language=SCSS\n"
+  );
+
   // Create placeholder image note
   fs.writeFileSync(
     path.join(fullPath, "images", ".gitkeep"),
