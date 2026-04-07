@@ -6,6 +6,10 @@
   "bin": {
     "create-bl-theme": "bin/cli.js"
   },
+  "files": [
+    "bin",
+    "templates"
+  ],
   "scripts": {
     "start": "node bin/cli.js"
   },
