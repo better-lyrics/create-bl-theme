@@ -429,7 +429,10 @@ MIT
     stepNum++;
   }
   console.log(
-    `  ${pc.dim(`${stepNum}.`)} Push to GitHub and submit to the theme store`
+    `  ${pc.dim(`${stepNum}.`)} Push to GitHub, then open a Submit theme issue:`
+  );
+  console.log(
+    `     ${pc.cyan("https://github.com/better-lyrics/themes/issues/new?template=submit-theme.yml")}`
   );
   console.log();
   console.log(pc.bold("  Resources:"));
@@ -808,11 +811,10 @@ async function publish(dir) {
     console.log(pc.yellow("Theme is not registered in the theme store."));
     console.log();
     console.log(pc.bold("To register your theme:"));
-    console.log("  1. Fork https://github.com/better-lyrics/themes");
-    console.log(`  2. Add { "repo": "${repo}" } to index.json`);
-    console.log("  3. Open a pull request");
+    console.log("  Open a Submit theme issue and enter your repo:");
+    console.log(`  ${pc.cyan("https://github.com/better-lyrics/themes/issues/new?template=submit-theme.yml")}`);
     console.log();
-    console.log(pc.dim("After your PR is merged, install the GitHub App for auto-updates:"));
+    console.log(pc.dim("A pull request gets opened and checked for you. After it merges, install the GitHub App for auto-updates:"));
     await promptGitHubAppInstall();
     process.exit(0);
   }

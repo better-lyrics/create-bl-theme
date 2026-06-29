@@ -151,16 +151,9 @@ Better Lyrics supports **GitHub Flavored Markdown (GFM)** in DESCRIPTION.md, so 
 ## Submitting to Theme Store
 
 1. Push your theme to a GitHub repository
-2. Fork [themes](https://github.com/better-lyrics/themes)
-3. Add your theme to `index.json`:
-   ```json
-   {
-     "themes": [
-       { "repo": "your-username/your-theme-repo" }
-     ]
-   }
-   ```
-4. Open a pull request
+2. Open a [Submit theme issue](https://github.com/better-lyrics/themes/issues/new?template=submit-theme.yml) and enter your repo
+
+A pull request gets opened and checked for you. Once a maintainer merges it, your theme is live.
 
 ### Auto-Publishing
 
