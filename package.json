@@ -8,7 +8,8 @@
   },
   "files": [
     "bin",
-    "templates"
+    "templates",
+    "skills"
   ],
   "scripts": {
     "start": "node bin/cli.js"
