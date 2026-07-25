@@ -1028,10 +1028,11 @@ async function bump(typeOrDir, dirArg) {
 // ---------------------------------------------------------------------------
 // Theme migration (old class-toggle engine -> new Web Animations API engine)
 //
-// Mirrors better-lyrics/tooling/migrate-theme.mjs. Rewrites the unambiguous
-// changes and flags the ones that need a human decision. Every rewrite matches
-// a literal token (a class name or a var() call), so it is safe on both plain
-// CSS and RICS source. See STYLING-MIGRATION.md in the extension repo.
+// Rewrites the unambiguous changes and flags the ones that need a human
+// decision. Every rewrite matches a literal token (a class name or a var()
+// call), so it is safe on both plain CSS and RICS source. The full mapping,
+// including the intent-level cases the codemod only flags, is in
+// skills/MIGRATION.md.
 // ---------------------------------------------------------------------------
 
 async function migrate(target, { write } = {}) {
@@ -1247,9 +1248,11 @@ function dedupeFlags(flags) {
 }
 
 // ---------------------------------------------------------------------------
-// Skill installer: writes the Better Lyrics theme skill (authoring + migration)
-// into whichever AI coding assistants the user has. Detects installed
-// assistants from marker folders and pre-selects them in the prompt.
+// Skill installer: writes the Better Lyrics theme skill into whichever AI
+// coding assistants the user has. The authoring guide is fetched fresh from the
+// better-lyrics repo on every install, so it never goes stale; the migration
+// guide is this package's own skills/MIGRATION.md. Detects installed assistants
+// from marker folders and pre-selects them in the prompt.
 // ---------------------------------------------------------------------------
 
 const SKILL_NAME = "better-lyrics-themes";
@@ -1257,6 +1260,25 @@ const SKILL_DESCRIPTION =
   "Better Lyrics theme development: selectors, CSS variables, DOM structure, and old-to-new animation engine migration. Use when creating, editing, or migrating a Better Lyrics theme (.rics or .css).";
 const SKILL_BEGIN = "<!-- BEGIN better-lyrics-themes (create-bl-theme) -->";
 const SKILL_END = "<!-- END better-lyrics-themes (create-bl-theme) -->";
+
+// The authoring guide lives in the extension repo and is fetched fresh on every
+// install so it never drifts from the canonical version. This package owns only
+// the migration guide (skills/MIGRATION.md).
+const AUTHORING_SKILL_RAW_URL =
+  "https://raw.githubusercontent.com/better-lyrics/better-lyrics/master/STYLING-SKILL.md";
+const AUTHORING_SKILL_DOC_URL =
+  "https://github.com/better-lyrics/better-lyrics/blob/master/STYLING-SKILL.md";
+
+async function fetchAuthoringSkill() {
+  try {
+    const res = await fetch(AUTHORING_SKILL_RAW_URL);
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text.trim() ? text : null;
+  } catch {
+    return null;
+  }
+}
 
 function assistantRegistry(dir, home) {
   const has = (...p) => p.some((f) => fs.existsSync(f));
@@ -1303,15 +1325,18 @@ function assistantRegistry(dir, home) {
 }
 
 // Insert or replace a marked block in a shared markdown file (AGENTS.md,
-// GEMINI.md), so re-running does not duplicate the skill.
+// GEMINI.md), so re-running does not duplicate the skill. If the markers are
+// orphaned (only one present) or out of order, strip every literal marker and
+// append a fresh block, so a hand-edited file never accumulates duplicates.
 function writeMarkerDoc(filePath, body) {
   const block = `${SKILL_BEGIN}\n\n${body}\n\n${SKILL_END}`;
   let content = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
   const start = content.indexOf(SKILL_BEGIN);
   const end = content.indexOf(SKILL_END);
-  if (start !== -1 && end !== -1) {
+  if (start !== -1 && end !== -1 && end > start) {
     content = content.slice(0, start) + block + content.slice(end + SKILL_END.length);
   } else {
+    content = content.split(SKILL_BEGIN).join("").split(SKILL_END).join("");
     const trimmed = content.trimEnd();
     content = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   }
@@ -1323,12 +1348,12 @@ async function skill(targetDir) {
   const dir = path.resolve(process.cwd(), targetDir);
   const home = os.homedir();
 
-  const skillPath = path.join(SKILLS_DIR, "STYLING-SKILL.md");
-  if (!fs.existsSync(skillPath)) {
-    console.log(pc.red("Error: bundled skill content is missing from this install."));
+  const migrationPath = path.join(SKILLS_DIR, "MIGRATION.md");
+  if (!fs.existsSync(migrationPath)) {
+    console.log(pc.red("Error: bundled migration guide is missing from this install."));
     process.exit(1);
   }
-  const body = fs.readFileSync(skillPath, "utf-8");
+  const migration = fs.readFileSync(migrationPath, "utf-8").trim();
 
   const assistants = assistantRegistry(dir, home);
   const anyDetected = assistants.some((a) => a.detected);
@@ -1367,6 +1392,19 @@ async function skill(targetDir) {
     console.log(pc.yellow("  Nothing selected."));
     console.log();
     return;
+  }
+
+  console.log();
+  console.log(pc.dim("  Fetching the latest authoring guide from better-lyrics..."));
+  const authoring = await fetchAuthoringSkill();
+
+  let body;
+  if (authoring) {
+    body = `${authoring.trimEnd()}\n\n${migration}\n`;
+  } else {
+    console.log(pc.yellow("  Could not fetch the authoring guide (offline?). Installing the migration guide only."));
+    console.log(pc.dim(`  Full authoring guide: ${AUTHORING_SKILL_DOC_URL}`));
+    body = `${migration}\n`;
   }
 
   console.log();
