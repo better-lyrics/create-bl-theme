@@ -49,6 +49,47 @@ The validator checks:
 - Image integrity (detects corrupted files)
 - Image dimensions (recommends 1280x720, but other sizes work fine)
 
+### Migrate a theme to the new animation engine
+
+Better Lyrics is about to rewrite its lyric animation engine: class toggles become the Web Animations API, and the lyric DOM moves to normal inline text flow. Themes that reach into the current engine's internals will need a few updates. This command does the mechanical ones for you and flags the rest.
+
+```bash
+# Preview what would change (does not modify anything)
+create-bl-theme migrate
+
+# Apply the automatic fixes in place
+create-bl-theme migrate --write
+
+# Target a specific theme directory or a single file
+create-bl-theme migrate ./my-theme --write
+create-bl-theme migrate ./my-theme/style.rics --write
+```
+
+It resolves `style.rics` (or `style.css`) in a directory, or takes a file path directly. It:
+
+- Auto-fixes the unambiguous changes: the active-line class (`.blyrics--animating` becomes `.blyrics--active`), the renamed line-synced class, and the dead `--blyrics-anim-delay` variable.
+- Flags the parts that need a human decision: word-level active state (now engine-driven), removed pause/break hooks, and selectors that assumed the old flat word DOM.
+- Rechecks that your `.rics` still compiles after writing.
+
+Most themes need nothing: every color, font, and layout variable is preserved. See the [styling reference](https://github.com/better-lyrics/better-lyrics/blob/master/STYLING.md) for the full selector and variable catalogue.
+
+### Install the theme skill for your AI assistant
+
+If you build themes with an AI coding assistant, install a Better Lyrics skill so it knows the selectors, CSS variables, DOM structure, and how to migrate old themes.
+
+```bash
+create-bl-theme skill
+```
+
+It detects which assistants you use, pre-selects them, and writes the skill in each one's format:
+
+- Claude Code: `.claude/skills/better-lyrics-themes/SKILL.md`
+- Codex and others: `AGENTS.md`
+- Gemini CLI: `GEMINI.md`
+- Cursor: `.cursor/rules/better-lyrics-themes.mdc`
+
+Run it inside your theme directory, or pass a path. Re-running updates the skill in place; your own content in `AGENTS.md` and `GEMINI.md` is left untouched.
+
 ### Bump version
 
 ```bash
