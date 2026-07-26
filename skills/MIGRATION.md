@@ -47,15 +47,19 @@ Renaming classes and variables is not enough. The old engine let themes customiz
   If the intent was just to remove the wobble, set `--blyrics-animate-word-wobble: 0` instead. Then delete the dead `@keyframes`.
 - Glow: map to `--blyrics-highlight-glow-filter-from` / `--blyrics-highlight-glow-filter-to` (both `drop-shadow(...)` strings using `var(--blyrics-glow-color)`), or set `--blyrics-animate-highlight-glow: 0` to remove it.
 
-**Glow color is global, resolved at the container.** The engine reads its glow filter from the lyrics container, and the browser bakes `var(--blyrics-glow-color)` into that string at read time. So a per-word or per-`::after` `--blyrics-glow-color` has no effect: every word glows with the one color the container resolved. Set glow color once on `.blyrics-container` (or `:root`). The old "null the glow on `::after`, restore it on `[data-long-word]`" pattern has no variable equivalent. Turn glow down or off globally:
+**Per-word glow color works.** The engine composes the glow filter with `var(--blyrics-glow-color)` left unresolved, so each word resolves its own color through the Web Animations API. The old "null the glow on `::after`, restore it on `[data-long-word]`" pattern carries straight over:
 
 ```css
-.blyrics-container { --blyrics-glow-color: color(display-p3 1 1 1 / 0.0001); }
-/* or */
-.blyrics-container { --blyrics-animate-highlight-glow: 0; }
+.blyrics--word::after {
+  --blyrics-glow-color: color(display-p3 1 1 1 / 0.0001);
+}
+.blyrics--word[data-long-word]::after,
+.blyrics--word[data-long-word] > .blyrics-word-highlight {
+  --blyrics-glow-color: color(display-p3 1 1 1 / 1);
+}
 ```
 
-There is no clean equivalent for the old per-word, time-synced glow, including the long-word-only variant. The engine owns per-word glow timing, and a static `filter` or `text-shadow` on the word is not a substitute: it applies constantly to the resting word instead of pulsing with each word as it is sung. Treat animated per-word glow as unavailable and set glow globally. The swipe knobs (`--lyric-transition-amount-*`) do animate per word, so per-word swipe still works; only the glow is global.
+Long wrapped words render their highlight in a real `.blyrics-word-highlight` child, so target it alongside `::after`. Tune the blur with `--blyrics-highlight-glow-radius-from` / `--blyrics-highlight-glow-radius-to` while keeping per-word color. Setting the full `--blyrics-highlight-glow-filter-from` / `--blyrics-highlight-glow-filter-to` instead resolves the color once at the container, so every word shares one glow color. Use `--blyrics-animate-highlight-glow: 0` to turn glow off.
 
 **Disabling an effect** was done many ways: `animation: none` on the dead animating class, a `@keyframes` flattened to `transform: none`, `.blyrics--word::after { display: none }`, a full `::after` / `::before` reset, a zero-alpha `--blyrics-glow-color`, a zero duration, or a forced `transform: translateY(0) !important`. All of them collapse to one flag now: `--blyrics-animate-line-scale`, `--blyrics-animate-word-wobble`, `--blyrics-animate-highlight-swipe`, `--blyrics-animate-highlight-glow`, `--blyrics-animate-highlight-fade`, `--blyrics-animate-scroll`, `--blyrics-animate-instrumental` (each `1` on, `0` off). Set the flag and delete the old hack.
 
