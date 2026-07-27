@@ -13,19 +13,39 @@ When editing by hand, apply this mapping.
 
 Safe automatic rewrites:
 
-- `.blyrics--animating` on a line becomes `.blyrics--active` (for example `.blyrics--line.blyrics--animating`, `.blyrics-container > div.blyrics--animating`, and `:not(.blyrics--animating)`). This also applies inside RICS string variables and `#{}` interpolation.
 - `.blyrics-zero-dur-animate` becomes `.blyrics-line-synced-word`.
 - `var(--blyrics-anim-delay, X)` becomes `X`, and `var(--blyrics-anim-delay)` with no fallback becomes `0s`. The engine owns per-word stagger now, so this variable is never set. Keep any `--blyrics-duration` reference; that one still exists.
 
 Needs a human decision (do not blindly rewrite):
 
 - `.blyrics--word.blyrics--animating` has no class equivalent. The engine animates each word's `::after` overlay directly. Remove per-word active rules, or drive them from `--blyrics-duration` and `[data-long-word]`.
-- `.blyrics--paused`, `.blyrics--pre-animating`, `.blyrics--break`, and `.blyrics--has-trailing-space` were removed. Delete those rules.
+- `.blyrics--pre-animating`, `.blyrics--break`, and `.blyrics--has-trailing-space` were removed. Delete those rules. `.blyrics--pre-animating` was a one-reflow marker used to restart CSS keyframes; the engine no longer restarts anything that way, and its window was identical to `.blyrics--animating` anyway.
 - Words are no longer direct `<span>` children of the line. `.blyrics--line > span` and `.blyrics-container > div > span` no longer select words; use `.blyrics--word`. Translations and romanizations are `<div class="blyrics--translated blyrics-content-line">`, not `<span>`.
 - The lyric line is no longer a flexbox. Replace `justify-content` / `order` / `flex-flow` on `.blyrics--line` with `text-align` and `transform-origin`.
 - Rules on `.blyrics--word::after` should also target `.blyrics-word-highlight`, because long wrapped words render their highlight in a real child element, not `::after`.
 
-Preserved (do not change): every color, font, layout, and effect variable, plus `--blyrics-duration` (still set on both words and lines), `--lyric-transition-amount-start` / `--lyric-transition-amount-end`, `.blyrics-container`, `.blyrics--line`, `.blyrics--word`, `.blyrics--active`, `.blyrics-user-scrolling`, `.blyrics--translated`, `.blyrics--romanized`, `.blyrics--instrumental*`, `.blyrics-rtl`, `data-sync`, `data-agent`, and `[blyrics-dfs]`. A theme that only sets variables needs no changes.
+Preserved (do not change): every color, font, layout, and effect variable, plus `--blyrics-duration` (still set on both words and lines), `--lyric-transition-amount-start` / `--lyric-transition-amount-end`, `.blyrics-container`, `.blyrics--line`, `.blyrics--word`, `.blyrics--active`, `.blyrics--animating` (line-level only), `.blyrics--paused`, `.blyrics-user-scrolling`, `.blyrics--translated`, `.blyrics--romanized`, `.blyrics--instrumental*`, `.blyrics-rtl`, `data-sync`, `data-agent`, and `[blyrics-dfs]`. A theme that only sets variables needs no changes.
+
+### Do not collapse `.blyrics--animating` into `.blyrics--active`
+
+They look interchangeable and are not. A line carries both, on two different clocks:
+
+| Class | Clock | Closes |
+| ----- | ----- | ------ |
+| `.blyrics--active` | Audio time plus `--blyrics-scroll-timing-offset` (0.5s default), so it runs ahead of what you hear | When the scroll target moves on, roughly half a second before the line stops playing |
+| `.blyrics--animating` | Audio time | Once the line's own words have actually finished |
+
+Anything that dims, blurs, hides, or shrinks previous lines must key off `.blyrics--animating`, or off both. Keying it off `.blyrics--active` alone makes the previous line drop out while its last word is still being sung. `.blyrics--active` is for scroll-anchored affordances: which line is centered, cursor, hit targets.
+
+```css
+/* wrong: previous line vanishes mid-word */
+.blyrics-container > div:not(.blyrics--active) { opacity: 0; }
+
+/* right: matches either, so it also works on engines older than 2.4.0.1 */
+.blyrics-container > :is(.blyrics--active, .blyrics--animating) { opacity: 1; }
+```
+
+`.blyrics--paused` sits on the line and on each of its words while playback is paused. Use it to freeze theme-authored CSS animations in step with the engine.
 
 ### Intent-level migration (effects that break silently)
 
