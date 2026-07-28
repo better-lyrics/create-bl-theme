@@ -1132,16 +1132,14 @@ function migrateSource(source) {
     return ".blyrics-line-synced-word";
   });
 
-  // 2. `.blyrics--animating`: on a line it maps to `.blyrics--active`; on a word
-  //    there is no class equivalent (the engine animates the word overlay), so flag it.
+  // 2. `.blyrics--animating`: on a line it still exists and must be left alone; on a
+  //    word there is no class equivalent (the engine animates the word overlay), so flag it.
   out = replaceTokens(out, /\.blyrics--animating\b/g, (offset, text) => {
     const compound = compoundAround(text, offset);
     if (/blyrics--word/.test(compound)) {
       note(flags, lineOf(text, offset), "word-active-state", "`.blyrics--word.blyrics--animating` has no equivalent: the engine now animates each word's `::after` via the Web Animations API. Remove the per-word active rule or drive it from `--blyrics-duration` / `[data-long-word]`.");
-      return null;
     }
-    note(changes, lineOf(text, offset), "rename-class", ".blyrics--animating -> .blyrics--active (line context)");
-    return ".blyrics--active";
+    return null;
   });
 
   // 3. Dead timing variable `--blyrics-anim-delay`: collapse to fallback, else 0s.
@@ -1157,7 +1155,6 @@ function migrateSource(source) {
 
   // Flags: removed hooks that need a human decision.
   scanFlags(out, flags, /\.blyrics--pre-animating\b/g, "removed-class", "`.blyrics--pre-animating` was removed. It reset the karaoke gradient before a line played; the engine handles that. Delete the rule.");
-  scanFlags(out, flags, /\.blyrics--paused\b/g, "removed-class", "`.blyrics--paused` was removed. Pause is a Web Animations API pause in JS with no class hook; paused-state styling cannot be expressed in CSS.");
   scanFlags(out, flags, /\.blyrics--break\b/g, "removed-class", "`.blyrics--break` (flex line-break spacer) was removed. Lines are normal inline text flow now; delete the rule.");
   scanFlags(out, flags, /\.blyrics--has-trailing-space\b/g, "removed-class", "`.blyrics--has-trailing-space` was removed. Word spacing is real whitespace now; delete the rule.");
 

@@ -67,8 +67,8 @@ create-bl-theme migrate ./my-theme/style.rics --write
 
 It resolves `style.rics` (or `style.css`) in a directory, or takes a file path directly. It:
 
-- Auto-fixes the unambiguous changes: the active-line class (`.blyrics--animating` becomes `.blyrics--active`), the renamed line-synced class, and the dead `--blyrics-anim-delay` variable.
-- Flags the parts that need a human decision: word-level active state (now engine-driven), removed pause/break hooks, and selectors that assumed the old flat word DOM.
+- Auto-fixes the unambiguous changes: the renamed line-synced class and the dead `--blyrics-anim-delay` variable.
+- Flags the parts that need a human decision: word-level active state (now engine-driven), removed line-break hooks, and selectors that assumed the old flat word DOM.
 - Rechecks that your `.rics` still compiles after writing.
 
 Most themes need nothing: every color, font, and layout variable is preserved. See the [styling reference](https://github.com/better-lyrics/better-lyrics/blob/master/STYLING.md) for the full selector and variable catalogue.
