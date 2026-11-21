@@ -73,6 +73,16 @@ It resolves `style.rics` (or `style.css`) in a directory, or takes a file path d
 
 Most themes need nothing: every color, font, and layout variable is preserved. See the [styling reference](https://github.com/better-lyrics/better-lyrics/blob/master/STYLING.md) for the full selector and variable catalogue.
 
+### Migrate a theme to the WebGL renderer
+
+Better Lyrics is moving to a WebGL renderer that draws the lyrics on a canvas. Theme variables and comment settings still apply. Rules that paint the lyric elements themselves do not: opacity, filters, transforms, colors, shadows and animations on lines and words, and anything keyed off `.blyrics--active` or `.blyrics--animating`. The same `migrate` command covers it:
+
+- **Writes automatically:** it reads your line opacity and blur rules (the "dim and blur lines around the sung one" effect most themes have) and appends the equivalent `--blyrics-line-opacity-*` / `--blyrics-line-blur-*` lists. The current renderer ignores these, so the theme keeps working on both.
+- **Flags with a replacement:** colors, scale and spacing, which have variables.
+- **Flags as not possible yet:** effects the renderer has no equivalent for, such as hover styles, text shadows and non-blur filters. If your theme needs one, ask in the [Better Lyrics Discord](https://discord.gg/UsHE3d5fWF) so it can be added to the renderer.
+
+The mapping is in [skills/MIGRATION.md](skills/MIGRATION.md), which `create-bl-theme skill` also installs for your AI assistant.
+
 ### Install the theme skill for your AI assistant
 
 If you build themes with an AI coding assistant, install a Better Lyrics skill so it knows the selectors, CSS variables, DOM structure, and how to migrate old themes.
