@@ -14,17 +14,24 @@
 // `--blyrics-line-opacity[-before|-after]` and `--blyrics-line-blur[-before|-after]`,
 // lists of values for the sung line, then 1, 2, 3... lines away. This pass
 // reads the theme's line rules and writes those lists, which the current DOM
-// renderer ignores, so the theme keeps working on both. Everything else is
-// flagged: with its variable replacement where there is one, and as not
-// possible yet where there is none, so the author can ask for it.
+// renderer ignores, so the theme keeps working on both.
+//
+// It edits someone else's theme, so it writes a value only where the cascade
+// settles it: never from a rule for only some screens, views or lines, never
+// over a value the author wrote, never past a value it cannot read. Those,
+// and everything else, are flagged: with the variable replacement where there
+// is one, and as not possible yet where there is none, so the author can ask.
 //
 // The full mapping is in skills/MIGRATION.md.
 // ---------------------------------------------------------------------------
+
+import { argumentsOf, blankComments, compareSpecificity, compounds, expandIs, parseRules, simples, specificity, splitTopLevel } from "./css.js";
 
 export const DISCORD_URL = "https://discord.gg/UsHE3d5fWF";
 
 const BLOCK_BEGIN = "/* create-bl-theme migrate: WebGL renderer (begin) */";
 const BLOCK_END = "/* create-bl-theme migrate: WebGL renderer (end) */";
+const BLOCK = new RegExp(`${escapeRegExp(BLOCK_BEGIN)}[\\s\\S]*?${escapeRegExp(BLOCK_END)}`);
 
 /** Variables only the DOM renderer read. */
 const DEAD_VARIABLES = [
@@ -65,64 +72,61 @@ const DEAD_VARIABLES = [
 ];
 
 const LYRIC_SUBJECT = /\.blyrics--(?:line|word|letter|active|animating|paused|translated|romanized|instrumental)\b|\.blyrics-word-highlight\b|\.blyrics-background-(?:line|lyric)\b|\.blyrics-line-main\b|\.blyrics-container\s*>\s*(?:div|\*|:is|:not)/;
+/** What the lists and hover values stand for, with what a line is when no rule says. */
+const KINDS = {
+  opacity: { property: "opacity", rest: "1", parse: parseOpacity },
+  blur: { property: "filter", rest: "0", parse: parseBlur },
+};
+
+/** `text` without the block an earlier run wrote, its lines kept. What is to be compiled and read. */
+export function withoutBlock(text) {
+  return text.replace(BLOCK, (block) => block.replace(/[^\n]/g, " "));
+}
 
 /**
- * Returns { output, changes, flags, unsupported } for `source`, given the CSS it compiles to (the
- * source itself for a .css theme). `changes` and `flags` are in the shape migrateSource uses.
+ * Returns { output, changes, flags, unsupported } for `source`, given the CSS `withoutBlock(source)`
+ * compiles to (the source itself for a .css theme). `changes` and `flags` are in the shape
+ * migrateSource uses.
  */
 export function migrateForWebgl(source, css) {
   const changes = [];
   const flags = [];
   const unsupported = [];
-  const rules = parseRules(stripComments(css));
+  const rules = parseRules(withoutBlock(css));
   const customs = customProperties(rules);
+  const authored = new Set(rules.flatMap((rule) => rule.declarations.map(([name]) => name)));
+  const review = (message, where = null) => flags.push({ line: where, code: "review", message });
 
   // 1. Distance effects and the hovered line, written as variables.
-  const lists = distanceLists(rules, customs);
-  const hover = hoverValues(rules, customs);
-  const written = [...lists.declarations, ...hover.declarations];
-  let output = removeBlock(source);
-  if (written.length > 0) {
-    const block = [
-      BLOCK_BEGIN,
-      "/* This theme's line opacity, blur and hover rules as the WebGL renderer reads them: lines fade",
-      "   and blur by their distance from the sung line, and the line under the mouse takes the hover",
-      "   values. The current renderer ignores these and keeps using the rules. */",
-      ".blyrics-container {",
-      ...written.map((d) => `  ${d}`),
-      "}",
-      BLOCK_END,
-    ].join("\n");
-    output = `${output.trimEnd()}\n\n${block}\n`;
-    changes.push({
-      line: lineOf(output, output.indexOf(BLOCK_BEGIN)),
-      code: "distance-lists",
-      message: `Added ${written.map((d) => d.split(":")[0]).join(", ")} from the theme's line rules. Watch a synced song to check the fade${hover.declarations.length ? " and the hover" : ""} match.`,
-    });
-  }
-  for (const note of [...lists.notes, ...hover.notes]) flags.push({ line: null, code: "distance-review", message: note });
+  const candidates = lineCandidates(rules, customs, review);
+  const written = [...distanceLists(candidates, authored, review), ...hoverValues(candidates, authored, review)];
+  const { output, change } = withBlock(source, written);
+  if (change) changes.push(change);
 
   // 2. What line rules do that the renderer cannot see. Read from the compiled CSS, where RICS
   //    nesting is flattened, so each finding names its full selector.
-  for (const { selector, body } of rules) {
-    for (const [property, value] of declarations(body)) {
-      for (const one of splitTopLevel(selector, ",")) classify(one.trim(), property, value);
+  for (const { selector, declarations } of rules) {
+    for (const one of splitTopLevel(selector, ",")) {
+      for (const [property, value] of declarations) classify(one.trim(), property, value);
     }
   }
   function classify(selector, property, value) {
     const line = selector;
     if (!LYRIC_SUBJECT.test(selector)) return;
-    const hover = /:hover\b/.test(selector);
+    // The footer and the buttons are ordinary DOM beside the lines.
+    if (compounds(selector).some((part) => /^\.blyrics-(?:footer|no-lyrics)|\.blyrics-footer/.test(withoutArguments(part.compound)))) return;
     const pseudo = /::?(?:before|after)\b/.test(selector);
     const word = /\.blyrics--word\b|\.blyrics--letter\b|\.blyrics-word-highlight\b/.test(lastCompound(selector));
+    const otherFilter = property === "filter" && /\b(?:brightness|contrast|saturate|grayscale|sepia|hue-rotate|invert|drop-shadow)\s*\(/.test(value);
 
-    if (hover) {
-      // A hovered line's opacity, blur and scale are written as variables (above).
-      if (/^(?:opacity|filter|transform|scale)$/.test(property) && hoveredLine(selector)) return;
-      if (/^(?:opacity|filter|transform|scale|color|background|text-shadow)/.test(property)) {
-        unsupported.push({ line, code: "hover", message: hoveredLine(selector) ? `\`${property}\` on a hovered line does not show. The line under the mouse can only change its opacity, blur and scale (\`--blyrics-line-hover-opacity\`, \`-blur\`, \`-scale\`).` : "Hover effects other than on the hovered line itself (for example dimming the other lines while the mouse is over the lyrics) do not show in the WebGL renderer." });
-        return;
+    if (compounds(selector).some((part) => isHovered(part.compound)) && /^(?:opacity|filter|transform|scale|color|background|text-shadow)/.test(property)) {
+      const line_ = expandIs(selector).map(hoveredLine).find(Boolean);
+      if (!line_) {
+        unsupported.push({ line, code: "hover", message: "Hover effects other than on the hovered line itself (for example dimming the other lines while the mouse is over the lyrics) do not show in the WebGL renderer." });
+      } else if (otherFilter || !/^(?:opacity|filter|transform|scale)$/.test(property)) {
+        unsupported.push({ line, code: "hover", message: `\`${property}\` on a hovered line does not show. The line under the mouse can only change its opacity, blur and scale (\`--blyrics-line-hover-opacity\`, \`-blur\`, \`-scale\`).` });
       }
+      return;
     }
     if (pseudo && property === "content") {
       unsupported.push({ line, code: "pseudo-content", message: "`::before` / `::after` content on lyric elements is not drawn by the WebGL renderer." });
@@ -133,7 +137,7 @@ export function migrateForWebgl(source, css) {
       case "filter":
         if (word) {
           unsupported.push({ line, code: "word-opacity", message: "Opacity or filters on single words are not drawn. Words are shown in `--blyrics-lyric-inactive-color` until sung and `--blyrics-lyric-active-color` once sung, which can carry an alpha." });
-        } else if (property === "filter" && /\b(?:brightness|contrast|saturate|grayscale|sepia|hue-rotate|invert|drop-shadow)\s*\(/.test(value)) {
+        } else if (otherFilter) {
           unsupported.push({ line, code: "line-filter", message: "Line filters other than `blur()` are not drawn by the WebGL renderer." });
         } else {
           flags.push({ line, code: "line-opacity", message: "Opacity and blur on lines are not drawn by the WebGL renderer: it fades and blurs lines from `--blyrics-line-opacity[-before|-after]` and `--blyrics-line-blur[-before|-after]` instead (written above where this theme's rules could be read). The rule can stay for the current renderer." });
@@ -194,7 +198,7 @@ export function migrateForWebgl(source, css) {
   }
 
   // 3. Variables only the DOM renderer read, found in the source so each finding has its line.
-  const text = stripCommentsKeepingLines(output.replace(blockPattern(), ""));
+  const text = blankComments(withoutBlock(source));
   for (const dead of DEAD_VARIABLES) {
     for (const m of text.matchAll(dead.pattern)) flags.push({ line: `L${lineOf(text, m.index)}`, code: "dead-var", message: dead.message });
   }
@@ -202,234 +206,341 @@ export function migrateForWebgl(source, css) {
   return { output, changes, flags: group(flags), unsupported: group(unsupported) };
 }
 
-// -- Distance lists --------------------------------------------------------
+// -- The block -------------------------------------------------------------
+
+function withBlock(source, written) {
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const existing = BLOCK.exec(source);
+  const at = existing ? lineOf(source, existing.index) : 0;
+  if (written.length === 0) {
+    if (!existing) return { output: source, change: null };
+    const before = source.slice(0, existing.index).trimEnd();
+    const after = source.slice(existing.index + existing[0].length).trimStart();
+    return {
+      output: `${before}${newline}${after ? `${newline}${after}` : ""}`,
+      change: { line: at, code: "distance-lists", message: "Removed the block an earlier migrate wrote: the theme's rules no longer give values for it." },
+    };
+  }
+  const block = [
+    BLOCK_BEGIN,
+    "/* This theme's line opacity, blur and hover rules as the WebGL renderer reads them: lines fade",
+    "   and blur by their distance from the sung line, and the line under the mouse takes the hover",
+    "   values. The current renderer ignores these and keeps using the rules. */",
+    ".blyrics-container {",
+    ...written.map((d) => `  ${d}`),
+    "}",
+    BLOCK_END,
+  ].join(newline);
+  if (existing?.[0] === block) return { output: source, change: null };
+  // In place, so what the author added after the block stays after it.
+  const output = existing ? source.replace(BLOCK, () => block) : `${source.trimEnd()}${newline}${newline}${block}${newline}`;
+  const names = written.map((d) => d.split(":")[0]);
+  const hover = names.some((name) => name.includes("-hover-"));
+  return {
+    output,
+    change: {
+      line: lineOf(output, output.indexOf(BLOCK_BEGIN)),
+      code: "distance-lists",
+      message: `${existing ? "Updated" : "Added"} ${names.join(", ")} from the theme's line rules. Watch a synced song to check the fade${hover ? " and the hover" : ""} match.`,
+    },
+  };
+}
+
+// -- Which lines a selector picks ------------------------------------------
+
+const STATE = /^\.blyrics--(?:active|animating)$/;
+/** Elements of the page that are always above the lyrics. */
+const PAGE = /^(?:\*|html|body|div|:root|ytmusic-app|ytmusic-app-layout|ytmusic-player-page|#layout|#content|#player-page|#side-panel|#tab-renderer|#blyrics-wrapper|\[page-type=["']?MUSIC_PAGE_TYPE_TRACK_LYRICS["']?\])$/;
+/** What is never true of the lyrics at rest, so `:not()` of it always holds. */
+const NOT_AT_REST = /^(?:\.blyrics-user-scrolling|:hover|:focus-within|\[data-sync=["']?none["']?\]|\[data-no-lyrics[^\]]*\]|\[data-loader-visible=["']?true["']?\]|\[data-layout[^\]]*\])$/;
+/** States the renderer handles itself: the reader scrolling, unsynced lyrics, no lyrics. */
+const RENDERER_STATE = /^(?:\.blyrics-user-scrolling|\[data-sync=["']?none["']?\]|\[data-no-lyrics[^\]]*\])$/;
+/** What a line never is, or too few are to matter. */
+const NOT_A_LINE = /^(?:p|:hover|:empty|\.blyrics-footer|\.blyrics-credits|\.blyrics-no-lyrics-button-container|\.blyrics--translated|\.blyrics--romanized|\.blyrics--instrumental|\[data-instrumental[^\]]*\])$/;
+/** A rule that covers only some screens, views or lines, which a list for every line cannot say. */
+const SCOPED = { scoped: true };
+
+/** Whether the compound itself, not an argument of its `:not()` or `:has()`, is being hovered. */
+function isHovered(compound) {
+  return simples(compound).some((simple) => simple === ":hover" || argumentsOf(simple, "is")?.some(isHovered));
+}
+
+function withoutArguments(compound) {
+  return simples(compound).filter((simple) => !simple.includes("(")).join("");
+}
+
+function isSung(compound) {
+  return simples(compound).some((simple) => STATE.test(simple));
+}
+
+function isPlainLine(compound) {
+  return simples(compound).every((simple) => STATE.test(simple) || /^(?:div|\*|\.blyrics--line)$/.test(simple));
+}
+
+/** Whether a container compound holds for every synced song at rest. */
+function isContainerAtRest(compound) {
+  return simples(compound).every((simple) => {
+    if (/^(?:div|\.blyrics-container|\[data-sync\]|\[data-loader-visible=["']?false["']?\])$/.test(simple)) return true;
+    const not = argumentsOf(simple, "not");
+    if (not) return not.flatMap((arg) => expandIs(arg)).every((arg) => compounds(arg).length === 1 && simples(arg).some((s) => NOT_AT_REST.test(s)));
+    return argumentsOf(simple, "has")?.some((arg) => {
+      const parts = compounds(arg);
+      return parts.length === 1 && parts[0].combinator !== "+" && parts[0].combinator !== "~" && isSung(arg) && isPlainLine(arg);
+    }) ?? false;
+  });
+}
+
+/** What a line compound asks of its line, or null when only some lines would pass. */
+function lineConditions(compound) {
+  const out = { sung: false, notSung: false, notBefore: false, notAfter: false, before: null };
+  for (const simple of simples(compound)) {
+    if (STATE.test(simple)) out.sung = true;
+    else if (/^(?:div|\*|\.blyrics--line|\[data-line-number\])$/.test(simple)) continue;
+    else if (simple.startsWith(":not(")) {
+      for (const arg of argumentsOf(simple, "not").flatMap((a) => expandIs(a))) {
+        const parts = compounds(arg);
+        const own = simples(arg);
+        if (parts.length === 1 && own.some((s) => NOT_A_LINE.test(s))) continue;
+        if (parts.length === 1 && isSung(arg) && isPlainLine(arg)) out.notSung = true;
+        else if (parts.length === 2 && parts[1].combinator === "~" && isSung(parts[0].compound) && parts.every((p) => isPlainLine(p.compound))) out.notAfter = true;
+        else if (own.length === 1 && own[0].startsWith(":has(")) {
+          const chain = beforeChain(own[0]);
+          if (!chain || chain[0] !== 1 || chain[1] !== Infinity) return null;
+          out.notBefore = true;
+        } else return null;
+      }
+    } else if (simple.startsWith(":has(") && !out.before) {
+      out.before = beforeChain(simple);
+      if (!out.before) return null;
+    } else return null;
+  }
+  return out;
+}
+
+/** The distances before the sung line that `:has(+ … + .blyrics--active)` picks, or null. */
+function beforeChain(simple) {
+  const alternatives = argumentsOf(simple, "has").flatMap((arg) => expandIs(arg));
+  let range = null;
+  for (const arg of alternatives) {
+    const parts = compounds(arg);
+    const siblings = parts.every((p) => (p.combinator === "+" || p.combinator === "~") && isPlainLine(p.compound));
+    if (!siblings || !isSung(parts[parts.length - 1].compound)) return null;
+    const found = [parts.length, parts.some((p) => p.combinator === "~") ? Infinity : parts.length];
+    if (range && (range[0] !== found[0] || range[1] !== found[1])) return null;
+    range = found;
+  }
+  return range;
+}
 
 /**
  * The lines a selector picks relative to the sung line, as distance ranges on each side (0 is the
- * sung line itself), or null when it is not a plain line rule this pass can read.
+ * sung line itself); SCOPED when it picks only some; null when it is no rule about lines at rest.
  */
 function lineRole(selector) {
   const parts = compounds(selector);
   if (parts.length === 0) return null;
-  const subject = parts[parts.length - 1].compound;
-  if (/::?(?:before|after)\b/.test(subject)) return null;
-  if (/:hover\b/.test(selector)) return null;
-  // Effects ease off while the reader scrolls; rules for that state are the renderer's to make.
-  if (parts.some((p) => hasPositive(p.compound, /\.blyrics-user-scrolling\b/))) return null;
-  // Unsynced lyrics have no sung line; the renderer leaves them plain.
-  if (/data-sync\s*=\s*["']?none/.test(selector) && !/:not\(\s*\[data-sync/.test(selector)) return null;
-  // Rules about one word's state, the loader or the empty view are not about lines' distance.
-  if (/data-word-state|data-no-lyrics|data-loader|\[data-layout|\.blyrics--(?:paused|instrumental)\b/.test(selector)) return null;
+  const all = parts.map((part) => simples(part.compound));
+  const subject = all[all.length - 1];
+  if (subject.some((s) => /^::?(?:before|after)$/.test(s) || s.startsWith("::"))) return null;
 
-  // Ancestors are the page's or the renderer's: a rule nested under some menu is not about lyrics.
-  if (parts.slice(0, -1).some((p) => (p.compound.replace(/:(?:not|has|is|where)\((?:[^()]|\([^()]*\))*\)/g, "").match(/\.[\w-]+/g) || []).some((c) => !c.startsWith(".blyrics")))) return null;
   // A line is `.blyrics--line`, a child of the container, or a sibling of either.
-  const lineish = (i) =>
-    /\.blyrics--(?:line|active|animating)\b/.test(parts[i].compound) ||
-    (i > 0 && parts[i].combinator === ">" && /\.blyrics-container\b/.test(parts[i - 1].compound));
-  let anchor = parts.length - 1;
-  while (anchor > 0 && (parts[anchor].combinator === "+" || parts[anchor].combinator === "~")) anchor--;
-  const isLine =
-    /\.blyrics--line\b/.test(subject) ||
-    (/^(?:div|\*|:not|:has|:is|\.blyrics--(?:active|animating))/.test(subject) && lineish(anchor));
+  let first = parts.length - 1;
+  while (first > 0 && (parts[first].combinator === "+" || parts[first].combinator === "~")) first--;
+  const lineish =
+    all[first].some((s) => s === ".blyrics--line" || STATE.test(s)) ||
+    (first > 0 && parts[first].combinator === ">" && all[first - 1].includes(".blyrics-container"));
+  const isLine = subject.includes(".blyrics--line") || (/^(?:div|\*|:|\.blyrics--(?:active|animating)|\[)/.test(subject[0]) && lineish);
   if (!isLine) return null;
-  // A line has no other class of the renderer's (the footer, the loader and credits sit beside them).
-  const strippedSubject = subject.replace(/:(?:not|has|is|where)\((?:[^()]|\([^()]*\))*\)/g, "");
-  if ((strippedSubject.match(/\.blyrics-[\w-]+/g) || []).some((c) => !/^\.blyrics--(?:line|active|animating)$/.test(c))) return null;
+  // The footer, the loader and the credits sit beside the lines.
+  if (subject.some((s) => s.startsWith(".blyrics") && !/^\.blyrics--(?:line|active|animating|paused|instrumental)$/.test(s))) return null;
 
-  const STATE = /\.blyrics--(?:active|animating)\b/;
-  const all = [0, Infinity];
-  if (hasPositive(subject, STATE)) return { before: [0, 0], after: [0, 0] };
-  const before = /:has\(\s*([+~])[^)]*\.blyrics--(?:active|animating)/.exec(subject);
-  if (before) return { before: before[1] === "+" ? [1, 1] : [1, Infinity], after: null };
+  if (all.flat().some((s) => RENDERER_STATE.test(s))) return null;
+  if (parts.some((part) => isHovered(part.compound))) return null;
 
-  // An earlier compound in the sung state, then sibling combinators down to this line.
-  for (let i = parts.length - 2; i >= 0; i--) {
-    if (!hasPositive(parts[i].compound, STATE)) continue;
-    const between = parts.slice(i + 1).map((p) => p.combinator);
-    if (between.some((c) => c !== "+" && c !== "~")) return null;
-    const steps = between.filter((c) => c === "+").length;
-    if (!between.includes("~")) return { before: null, after: [steps, steps] };
-    return { before: null, after: [Math.max(1, steps + (between[0] === "~" ? 1 : 0)), Infinity] };
+  for (let i = 0; i < first; i++) {
+    if (parts[i].combinator === "+" || parts[i].combinator === "~") return SCOPED;
+    const fits = all[i].includes(".blyrics-container") ? isContainerAtRest(parts[i].compound) : all[i].every((s) => PAGE.test(s));
+    if (!fits) return SCOPED;
   }
+  const chain = parts.slice(first).map((part) => ({ ...part, ...lineConditions(part.compound) }));
+  if (chain.some((part) => part.sung === undefined)) return SCOPED;
+  const last = chain[chain.length - 1];
+
+  if (last.sung) return chain.length > 1 || last.before || last.notSung ? SCOPED : { before: [0, 0], after: [0, 0] };
+  if (chain.length > 1) {
+    // The sung line, then siblings down to this one: each step is at least a line further.
+    if (!chain[0].sung || chain[0].notSung || chain[0].before || chain.slice(1).some((part) => part.sung || part.before)) return SCOPED;
+    const steps = chain.length - 1;
+    const open = chain.slice(1).some((part) => part.combinator === "~");
+    return last.notAfter ? SCOPED : { before: null, after: [steps, open ? Infinity : steps] };
+  }
+  if (last.before) return last.notBefore ? SCOPED : { before: last.before, after: null };
   // Every line, or every line but the sung one, or but those on one side of it.
-  const notAfter = /:not\([^)]*\.blyrics--(?:active|animating)\s*~/.test(subject);
-  const notBefore = /:not\(\s*:has\(\s*~[^)]*\.blyrics--(?:active|animating)/.test(subject);
-  const notSung = /:not\(\s*(?::is\()?[^)~]*\.blyrics--(?:active|animating)\s*[,)]/.test(subject);
-  const first = notSung ? 1 : 0;
-  return { before: notBefore ? null : [first, Infinity], after: notAfter ? null : [first, Infinity] };
+  const from = last.notSung ? 1 : 0;
+  return { before: last.notBefore ? null : [from, Infinity], after: last.notAfter ? null : [from, Infinity] };
 }
 
-/**
- * The selector without the `:hover` on its subject, when it picks the hovered line itself (any
- * line, not one in a given state), or null.
- */
+/** The selector without the `:hover` on its subject, when that is a line, or null. */
 function hoveredLine(selector) {
   const parts = compounds(selector);
-  if (parts.length === 0) return null;
-  const subject = parts[parts.length - 1].compound;
-  if (!/:hover\b/.test(subject) || parts.slice(0, -1).some((p) => /:hover\b/.test(p.compound))) return null;
-  const without = selector.replace(/:hover\b(?![\s\S]*:hover\b)/, "");
-  const role = lineRole(without);
-  if (!role) return null;
-  const all = (range) => range && range[0] === 0 && range[1] === Infinity;
-  return all(role.before) && all(role.after) ? without : null;
+  if (parts.length === 0 || parts.slice(0, -1).some((part) => isHovered(part.compound))) return null;
+  const subject = simples(parts[parts.length - 1].compound);
+  if (!subject.includes(":hover")) return null;
+  const rest = subject.filter((s) => s !== ":hover").join("") || "*";
+  const without = [...parts.slice(0, -1), { combinator: parts[parts.length - 1].combinator, compound: rest }]
+    .map((part) => `${part.combinator} ${part.compound}`.trim())
+    .join(" ");
+  return lineRole(without) ? without : null;
 }
 
-/** The hovered line's opacity, blur and scale, as `--blyrics-line-hover-*` declarations. */
-function hoverValues(rules, customs) {
-  const found = { opacity: [], blur: [], scale: [] };
-  const notes = [];
+// -- The cascade on lines --------------------------------------------------
+
+/** Every opacity, blur and scale a rule gives lines, with where it applies and what it weighs. */
+function lineCandidates(rules, customs, review) {
+  const out = { opacity: [], blur: [], scale: [], visibility: [], "pointer-events": [] };
   let order = 0;
-  for (const { selector, body } of rules) {
-    const declared = resolved(declarations(body), customs);
-    for (const one of splitTopLevel(selector, ",").flatMap((s) => expandIs(s.trim()))) {
-      if (!hoveredLine(one)) continue;
-      const meta = { specificity: specificity(one), order: order++ };
-      const add = (kind, raw, value) => {
-        if (raw === undefined) return;
-        if (value === null) {
-          notes.push(`Could not read \`${raw}\` on \`${one}\` into \`--blyrics-line-hover-${kind}\`; set it by hand.`);
-          return;
+  for (const { selector, conditional, declarations } of rules) {
+    for (const [property, raw, important] of declarations) {
+      order++;
+      const kind = { opacity: "opacity", filter: "blur", transform: "scale", scale: "scale", visibility: "visibility", "pointer-events": "pointer-events" }[property];
+      if (!kind) continue;
+      const hit = kind === "visibility" || kind === "pointer-events"; // whether a line can be hovered at all
+      const value = resolve(raw, customs);
+      for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
+        for (const one of expandIs(original)) {
+          const hovered = hoveredLine(one);
+          if (hit && hovered) continue;
+          if (kind === "scale" && !hovered) {
+            // At rest the renderer scales lines itself; only a transform that beats a hover matters.
+            if (!important) continue;
+          }
+          const role = lineRole(hovered ?? one);
+          if (!role) continue;
+          if (role.scoped || conditional) {
+            if (!hit && (kind !== "scale" || hovered)) {
+              review(
+                "These opacity, blur or hover rules apply to only some screens, views or lines, so they were left out of the generated values, which apply to every line. Set the variables under a selector or media query of your own if they matter.",
+                original
+              );
+            }
+            continue;
+          }
+          const parsed = hit ? value : kind === "scale" ? (property === "scale" ? parseScaleNumber(value) : parseScale(value)) : KINDS[kind].parse(value);
+          out[kind].push({ ...role, hovered: !!hovered, value: parsed, raw: `${property}: ${raw}`, selector: original, important, specificity: specificity(original), order });
         }
-        found[kind].push({ ...meta, value, important: /!important/.test(raw) });
-      };
-      add("opacity", declared.get("opacity"), declared.has("opacity") ? parseOpacity(declared.get("opacity")) : null);
-      add("blur", declared.get("filter"), declared.has("filter") ? parseBlur(declared.get("filter")) : null);
-      const transform = declared.get("transform");
-      if (transform !== undefined) add("scale", transform, parseScale(transform));
-      const scale = declared.get("scale");
-      if (scale !== undefined) add("scale", scale, parseOpacity(scale));
-    }
-  }
-  const out = [];
-  for (const kind of ["opacity", "blur", "scale"]) {
-    const value = winner(found[kind]);
-    if (value !== undefined) out.push(`--blyrics-line-hover-${kind}: ${value};`);
-  }
-  return { declarations: out, notes: [...new Set(notes)] };
-}
-
-/** The uniform scale of a transform made only of `scale(n)`, `none` meaning 1. */
-function parseScale(value) {
-  const v = value.replace(/!important/, "").trim();
-  if (v === "none") return "1";
-  const m = /^scale\(\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(v);
-  if (!m || (m[2] !== undefined && m[2] !== m[1])) return null;
-  return trimNumber(Number.parseFloat(m[1]));
-}
-
-/** Custom properties the theme sets on the page or the container, by name; the last one wins. */
-function customProperties(rules) {
-  const out = new Map();
-  for (const { selector, body } of rules) {
-    if (!splitTopLevel(selector, ",").some((s) => /^(?::root|html|body|\*|\.blyrics-container)$/.test(s.trim()))) continue;
-    for (const part of splitTopLevel(body, ";")) {
-      const i = part.indexOf(":");
-      const name = i < 0 ? "" : part.slice(0, i).trim();
-      if (name.startsWith("--")) out.set(name, part.slice(i + 1).trim());
+      }
     }
   }
   return out;
-}
-
-/** `declared` with `var()` references to the theme's own custom properties filled in. */
-function resolved(declared, customs) {
-  const out = new Map();
-  for (const [name, value] of declared) {
-    let v = value;
-    for (let depth = 0; depth < 5 && /var\(/.test(v); depth++) {
-      v = v.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)/g, (m, ref, fallback) => customs.get(ref) ?? fallback?.trim() ?? m);
-    }
-    out.set(name, v);
-  }
-  return out;
-}
-
-function distanceLists(rules, customs) {
-  const candidates = { opacity: [], blur: [] };
-  const notes = [];
-  let order = 0;
-  for (const { selector, body } of rules) {
-    const declared = resolved(declarations(body), customs);
-    const opacity = declared.get("opacity");
-    const filter = declared.get("filter");
-    if (opacity === undefined && filter === undefined) continue;
-    for (const one of splitTopLevel(selector, ",").flatMap((s) => expandIs(s.trim()))) {
-      const role = lineRole(one);
-      if (!role) continue;
-      const add = (kind, raw, parse) => {
-        if (raw === undefined) return;
-        const value = parse(raw);
-        if (value === null) {
-          notes.push(`Could not read \`${kind === "blur" ? "filter" : "opacity"}: ${raw}\` on \`${one}\` into a distance list; set that value in the lists by hand.`);
-          return;
-        }
-        candidates[kind].push({ ...role, value, important: /!important/.test(raw), specificity: specificity(one), order: order++ });
-      };
-      add("opacity", opacity, parseOpacity);
-      add("blur", filter, parseBlur);
-    }
-  }
-
-  const lists = {};
-  for (const [kind, rest] of [["opacity", "1"], ["blur", "0"]]) {
-    lists[kind] = { before: sideList(candidates[kind], "before", rest), after: sideList(candidates[kind], "after", rest) };
-  }
-  // A sung line the rules make invisible means the theme shows lyrics some other way (through
-  // per-word rules, say), which the renderer cannot draw; the lists would only hide everything.
-  if (Number(lists.opacity.after[0]) < 0.05) {
-    notes.push("This theme's line rules leave even the sung line transparent, so it shows lyrics through per-word or other rules the WebGL renderer does not draw. No distance lists were written: decide how lines should look with `--blyrics-line-opacity` / `--blyrics-line-blur` by hand.");
-    return { declarations: [], notes: [...new Set(notes)] };
-  }
-  // Past the point where lines are fully transparent, their blur does not matter.
-  for (const side of ["before", "after"]) {
-    const op = lists.opacity[side];
-    if (op.length > 1 && op[op.length - 1] === "0") {
-      const gone = op.length - 1;
-      const blur = lists.blur[side];
-      if (blur.length > gone) lists.blur[side] = trimTail(blur.slice(0, gone));
-    }
-  }
-
-  const out = [];
-  for (const [kind, rest] of [["opacity", "1"], ["blur", "0"]]) {
-    const { before, after } = lists[kind];
-    const name = `--blyrics-line-${kind}`;
-    const plain = (list) => list.length === 1 && list[0] === rest;
-    if (plain(before) && plain(after)) continue;
-    if (before.join(" ") === after.join(" ")) out.push(`${name}: ${after.join(" ")};`);
-    else {
-      if (!plain(before)) out.push(`${name}-before: ${before.join(" ")};`);
-      if (!plain(after)) out.push(`${name}-after: ${after.join(" ")};`);
-    }
-  }
-  return { declarations: out, notes: [...new Set(notes)] };
-}
-
-/** The values for the sung line, then 1, 2, 3... lines to one side, as the cascade picks them. */
-function sideList(candidates, side, rest) {
-  const ranges = candidates.filter((c) => c[side]);
-  const covering = (d) => ranges.filter((c) => d >= c[side][0] && d <= c[side][1]);
-  const sung = candidates.filter((c) => (c.before && c.before[0] === 0) || (c.after && c.after[0] === 0));
-  const reach = Math.max(0, ...ranges.flatMap((c) => [c[side][0], c[side][1] === Infinity ? c[side][0] : c[side][1]]));
-  const list = [winner(sung) ?? rest];
-  for (let d = 1; d <= reach + 1; d++) list.push(winner(covering(d)) ?? rest);
-  return trimTail(list);
 }
 
 function winner(candidates) {
   let best = null;
   for (const c of candidates) {
-    if (!best || compare(c, best) >= 0) best = c;
+    if (!best || (c.important !== best.important ? c.important : compareSpecificity(c.specificity, best.specificity) >= 0)) best = c;
   }
-  return best?.value;
+  return best;
 }
 
-function compare(a, b) {
-  if (a.important !== b.important) return a.important ? 1 : -1;
-  for (let i = 0; i < 3; i++) if (a.specificity[i] !== b.specificity[i]) return a.specificity[i] - b.specificity[i];
-  return a.order - b.order;
+/** The winning candidate (null for none) for the sung line, then 1, 2, 3... lines to one side. */
+function cascade(candidates, side, reach) {
+  const out = [];
+  for (let d = 0; d <= reach; d++) out.push(winner(candidates.filter((c) => c[side] && d >= c[side][0] && d <= c[side][1])));
+  return out;
+}
+
+/** One past the furthest distance any candidate tells apart. */
+function reachOf(candidates) {
+  const edges = candidates.flatMap((c) => [c.before, c.after].filter(Boolean).flatMap(([from, to]) => [from, to === Infinity ? from : to]));
+  return Math.max(0, ...edges) + 1;
+}
+
+function distanceLists(candidates, authored, review) {
+  const lists = {};
+  for (const [kind, { rest }] of Object.entries(KINDS)) {
+    const resting = candidates[kind].filter((c) => !c.hovered);
+    if (resting.length === 0) continue;
+    const reach = reachOf(resting);
+    const won = { before: cascade(resting, "before", reach), after: cascade(resting, "after", reach) };
+    const unreadable = [...won.before, ...won.after].find((c) => c && c.value === null);
+    if (unreadable) {
+      review(`Could not read \`${unreadable.raw}\`, so no --blyrics-line-${kind} list was written; set it by hand.`, unreadable.selector);
+      continue;
+    }
+    lists[kind] = {};
+    for (const side of ["before", "after"]) lists[kind][side] = trimTail(won[side].map((c) => c?.value ?? rest));
+  }
+
+  if (lists.opacity) {
+    // A sung line the rules make invisible means the theme shows lyrics some other way (through
+    // per-word rules, say), which the renderer cannot draw; the lists would only hide everything.
+    if (Number(lists.opacity.after[0]) < 0.05) {
+      review("This theme's line rules leave even the sung line transparent, so it shows lyrics through per-word or other rules the WebGL renderer does not draw. No distance lists were written: decide how lines should look with `--blyrics-line-opacity` / `--blyrics-line-blur` by hand.");
+      return [];
+    }
+    // Past the point where lines are fully transparent, their blur does not matter.
+    for (const side of ["before", "after"]) {
+      const { [side]: opacity } = lists.opacity;
+      if (!lists.blur || opacity[opacity.length - 1] !== "0") continue;
+      lists.blur[side] = trimTail(lists.blur[side].slice(0, opacity.length - 1));
+    }
+  }
+
+  const out = [];
+  for (const [kind, { before, after }] of Object.entries(lists)) {
+    const name = `--blyrics-line-${kind}`;
+    const plain = (list) => list.length === 1 && list[0] === KINDS[kind].rest;
+    if (plain(before) && plain(after)) continue;
+    if ([name, `${name}-before`, `${name}-after`].some((n) => authored.has(n))) {
+      review(`The theme already sets ${name} lists, so they were left as written.`);
+    } else if (before.join(" ") === after.join(" ")) {
+      out.push(`${name}: ${after.join(" ")};`);
+    } else {
+      if (!plain(before)) out.push(`${name}-before: ${before.join(" ")};`);
+      if (!plain(after)) out.push(`${name}-after: ${after.join(" ")};`);
+    }
+  }
+  return out;
+}
+
+/** A hover value is written when a hovered line ends up the same wherever it is. */
+function hoverValues(candidates, authored, review) {
+  const out = [];
+  for (const kind of ["opacity", "blur", "scale"]) {
+    const all = candidates[kind];
+    if (!all.some((c) => c.hovered)) continue;
+    const reach = reachOf(all);
+    const won = [...cascade(all, "before", reach), ...cascade(all, "after", reach)];
+    if (!won.some((c) => c?.hovered)) continue; // It never wins, so it does nothing today.
+    const name = `--blyrics-line-hover-${kind}`;
+    if (authored.has(name)) {
+      review(`The theme already sets ${name}, so it was left as written.`);
+      continue;
+    }
+    // With no rule, opacity and blur are what they are at rest; scale is the renderer's own.
+    const values = new Set(won.map((c) => (c ? c.value : (KINDS[kind]?.rest ?? null))));
+    const [value] = values;
+    if (values.size === 1 && value !== null) {
+      if (kind === "opacity" && value !== "0" && someLinesCannotBeHovered(candidates)) {
+        review(`The theme hides some lines from the mouse with visibility or pointer-events, and ${name} would show those when hovered, so it was not written; set it by hand if that is fine.`);
+        continue;
+      }
+      out.push(`${name}: ${value};`);
+    } else {
+      review(`The theme's hover ${kind} differs from line to line or could not be read, and ${name} applies to whichever line is hovered, so it was not written; set it by hand.`, all.find((c) => c.hovered).selector);
+    }
+  }
+  return out;
+}
+
+function someLinesCannotBeHovered(candidates) {
+  for (const [kind, hidden] of [["visibility", /^(?:hidden|collapse)$/], ["pointer-events", /^none$/]]) {
+    const set = candidates[kind];
+    if (set.length === 0) continue;
+    const reach = reachOf(set);
+    if ([...cascade(set, "before", reach), ...cascade(set, "after", reach)].some((c) => c && hidden.test(c.value))) return true;
+  }
+  return false;
 }
 
 function trimTail(list) {
@@ -438,202 +549,81 @@ function trimTail(list) {
   return out;
 }
 
-/** Each alternative of the first `:is()` / `:where()` outside `:not()`, substituted in place. */
-function expandIs(selector, depth = 0) {
-  if (depth > 4) return [selector];
-  const match = /:(is|where)\(/g;
-  let m;
-  while ((m = match.exec(selector))) {
-    if (insideNot(selector, m.index)) continue;
-    const open = m.index + m[0].length;
-    const close = matchingParen(selector, open - 1);
-    if (close < 0) return [selector];
-    const before = selector.slice(0, m.index);
-    const after = selector.slice(close + 1);
-    // A complex alternative (with combinators) only stands in for a whole compound.
-    const wholeCompound = /(?:^|[\s>+~])$/.test(before) && /^(?:$|[\s>+~,])/.test(after);
-    const args = splitTopLevel(selector.slice(open, close), ",").map((a) => a.trim());
-    if (args.some((a) => compounds(a).length > 1) && !wholeCompound) return [selector];
-    return args.flatMap((arg) => expandIs(`${before}${arg}${after}`, depth + 1));
-  }
-  return [selector];
-}
+// -- Values ----------------------------------------------------------------
 
-function insideNot(text, index) {
-  let depth = 0;
-  for (let i = index - 1; i >= 0; i--) {
-    if (text[i] === ")") depth++;
-    else if (text[i] === "(") {
-      if (depth === 0) return /:(?:not|has)$/.test(text.slice(0, i));
-      depth--;
+/** The theme's own custom properties as the container inherits them, where they always hold. */
+function customProperties(rules) {
+  const found = new Map();
+  rules.forEach(({ selector, conditional, declarations }, order) => {
+    if (conditional) return;
+    for (const one of splitTopLevel(selector, ",").map((s) => s.trim())) {
+      // The nearer element's value is the inherited one, whatever the specificity.
+      const near = { ":root": 1, html: 1, body: 2, "*": 3, ".blyrics-container": 3 }[one];
+      if (!near) continue;
+      for (const [name, value, important] of declarations) {
+        if (!name.startsWith("--")) continue;
+        const next = { value, near, important, specificity: specificity(one), order };
+        const held = found.get(name);
+        if (!held || near > held.near || (near === held.near && winner([held, next]) === next)) found.set(name, next);
+      }
     }
-  }
-  return false;
-}
-
-function matchingParen(text, open) {
-  let depth = 0;
-  for (let i = open; i < text.length; i++) {
-    if (text[i] === "(") depth++;
-    else if (text[i] === ")" && --depth === 0) return i;
-  }
-  return -1;
-}
-
-/** [ids, classes/attributes/pseudo-classes, types] of a complex selector. */
-function specificity(selector) {
-  const out = [0, 0, 0];
-  let rest = selector;
-  // :is/:not/:has count as their most specific argument; :where counts nothing.
-  rest = rest.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, "");
-  rest = rest.replace(/:(?:is|not|has)\(((?:[^()]|\([^()]*\))*)\)/g, (_m, args) => {
-    const best = splitTopLevel(args, ",").map((a) => specificity(a.trim())).sort((x, y) => y[0] - x[0] || y[1] - x[1] || y[2] - x[2])[0] ?? [0, 0, 0];
-    for (let i = 0; i < 3; i++) out[i] += best[i];
-    return " ";
   });
-  out[0] += (rest.match(/#[\w-]+/g) || []).length;
-  out[1] += (rest.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+/g) || []).length;
-  out[2] += (rest.match(/(?:^|[\s>+~])[a-z][\w-]*|::[\w-]+/gi) || []).length;
-  return out;
+  return new Map([...found].map(([name, { value }]) => [name, value]));
+}
+
+function resolve(value, customs) {
+  let v = value;
+  for (let depth = 0; depth < 8 && v.includes("var(") && v.length < 2000; depth++) {
+    v = v.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)/g, (m, name, fallback) => customs.get(name) ?? fallback?.trim() ?? m);
+  }
+  return v.trim();
 }
 
 function parseOpacity(value) {
-  const v = value.replace(/!important/, "").trim();
-  if (/^-?[\d.]+%$/.test(v)) return trimNumber(Number.parseFloat(v) / 100);
-  if (/^-?[\d.]+$/.test(v)) return trimNumber(Number.parseFloat(v));
-  return null;
+  const m = /^(-?(?:\d+(?:\.\d+)?|\.\d+))(%?)$/.exec(value);
+  return m ? trimNumber(Math.min(1, Math.max(0, Number(m[1]) / (m[2] ? 100 : 1)))) : null;
 }
 
 function parseBlur(value) {
-  const v = value.replace(/!important/, "").trim();
-  if (v === "none") return "0";
-  const blur = /blur\(\s*([\d.]+)([a-z]*)\s*\)/.exec(v);
-  if (!blur) return /^[a-z-]+\(/.test(v) ? "0" : null;
-  const n = Number.parseFloat(blur[1]);
+  if (value === "none") return "0";
+  if (/\b(?:var|calc|min|max|clamp)\(/.test(value)) return null;
+  // A filter without a blur leaves the line sharp.
+  if (!/\bblur\(/.test(value)) return /^[a-z-]+\(/.test(value) ? "0" : null;
+  const m = /\bblur\(\s*(\d+(?:\.\d+)?|\.\d+)([a-z]*)\s*\)/.exec(value);
+  if (!m) return /\bblur\(\s*\)/.test(value) ? "0" : null;
+  const n = Number(m[1]);
   if (n === 0) return "0";
   // The renderer's lists take px and rem; an em blur depends on the line's font size.
-  if (blur[2] !== "" && blur[2] !== "px" && blur[2] !== "rem") return null;
-  return `${trimNumber(n)}${blur[2] || "px"}`;
+  if (m[2] !== "px" && m[2] !== "rem") return null;
+  return `${trimNumber(n)}${m[2]}`;
+}
+
+/** The uniform scale of a transform made only of `scale(n)`, `none` meaning 1. */
+function parseScale(value) {
+  if (value === "none") return "1";
+  const m = /^scale\(\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(value);
+  if (!m || (m[2] !== undefined && m[2] !== m[1])) return null;
+  return parseScaleNumber(m[1]);
+}
+
+function parseScaleNumber(value) {
+  if (value === "none") return "1";
+  return /^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value) ? trimNumber(Number(value)) : null;
 }
 
 function trimNumber(n) {
   return String(Math.round(n * 1000) / 1000);
 }
 
-// -- CSS reading ------------------------------------------------------------
-
-function stripComments(css) {
-  return css.replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-function stripCommentsKeepingLines(css) {
-  return css.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
-}
-
-/** Innermost `selector { body }` blocks: flat rules, including those inside @media and nesting parents' children. */
-function parseRules(css) {
-  const rules = [];
-  for (const m of css.matchAll(/([^{};]+)\{([^{}]*)\}/g)) {
-    const selector = m[1].trim();
-    if (!selector || selector.startsWith("@") || /^(?:from|to|[\d.]+%)(?:\s*,\s*(?:from|to|[\d.]+%))*$/.test(selector)) continue;
-    rules.push({ selector: selector.replace(/\s+/g, " "), body: m[2] });
-  }
-  return rules;
-}
-
-function declarations(body) {
-  const out = new Map();
-  for (const part of splitTopLevel(body, ";")) {
-    const i = part.indexOf(":");
-    if (i < 0) continue;
-    const name = part.slice(0, i).trim().toLowerCase();
-    if (!name || name.startsWith("--") || name.startsWith("$")) continue;
-    out.set(name, part.slice(i + 1).trim());
-  }
-  return out;
-}
-
-function splitTopLevel(text, separator) {
-  const out = [];
-  let depth = 0;
-  let quote = null;
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'") quote = ch;
-    else if (ch === "(" || ch === "[") depth++;
-    else if (ch === ")" || ch === "]") depth--;
-    else if (ch === separator && depth === 0) {
-      out.push(text.slice(start, i));
-      start = i + 1;
-    }
-  }
-  out.push(text.slice(start));
-  return out;
-}
-
-/** The compounds of a complex selector, each with the combinator before it (" " for descendant). */
-function compounds(selector) {
-  const out = [];
-  let depth = 0;
-  let current = "";
-  let combinator = null;
-  const flush = () => {
-    if (current.trim()) out.push({ combinator: combinator ?? "", compound: current.trim() });
-    current = "";
-  };
-  for (let i = 0; i < selector.length; i++) {
-    const ch = selector[i];
-    if (ch === "(" || ch === "[") depth++;
-    if (ch === ")" || ch === "]") depth--;
-    if (depth === 0 && (ch === ">" || ch === "+" || ch === "~")) {
-      flush();
-      combinator = ch;
-      continue;
-    }
-    if (depth === 0 && /\s/.test(ch)) {
-      if (current.trim()) {
-        flush();
-        combinator = " ";
-      }
-      continue;
-    }
-    current += ch;
-  }
-  flush();
-  if (out.length > 0) out[0].combinator = "";
-  return out;
-}
+// -- Bookkeeping ----------------------------------------------------------
 
 function lastCompound(selector) {
   const parts = compounds(selector);
   return parts.length ? parts[parts.length - 1].compound : "";
 }
 
-/** Whether `compound` matches `pattern` itself, not only inside a `:not(...)` or `:has(...)`. */
-function hasPositive(compound, pattern) {
-  let stripped = compound;
-  let previous;
-  do {
-    previous = stripped;
-    stripped = stripped.replace(/:(?:not|has)\([^()]*(?:\([^()]*\)[^()]*)*\)/g, "");
-  } while (stripped !== previous);
-  return pattern.test(stripped);
-}
-
-// -- Bookkeeping ----------------------------------------------------------
-
-function blockPattern() {
-  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\n*${escape(BLOCK_BEGIN)}[\\s\\S]*?${escape(BLOCK_END)}\\n?`, "g");
-}
-
-function removeBlock(source) {
-  return source.replace(blockPattern(), "\n");
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
 }
 
 function lineOf(text, index) {

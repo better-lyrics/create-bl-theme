@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 import { imageSize } from "image-size";
 import { execSync, spawn } from "child_process";
 import { compileWithDetails } from "rics";
-import { DISCORD_URL, migrateForWebgl } from "./webgl.js";
+import { DISCORD_URL, migrateForWebgl, withoutBlock } from "./webgl.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +33,10 @@ const pkg = JSON.parse(
 );
 
 // Cross-platform browser opener
+const IS_PRERELEASE = pkg.version.includes("-");
+/** How to run this release through npx. */
+const NPX = `npx create-bl-theme@${IS_PRERELEASE ? "beta" : "latest"}`;
+
 function openBrowser(url) {
   const platform = process.platform;
   let command;
@@ -465,7 +469,7 @@ MIT
   console.log(`  ${pc.dim("Submit Theme:")}   https://github.com/better-lyrics/themes`);
   console.log();
   console.log(
-    pc.dim("  Validate your theme with: ") + pc.cyan(`npx create-bl-theme@latest validate ${dir}`)
+    pc.dim("  Validate your theme with: ") + pc.cyan(`${NPX} validate ${dir}`)
   );
   console.log();
 }
@@ -1061,12 +1065,22 @@ async function migrate(target, { write } = {}) {
   const source = fs.readFileSync(stylePath, "utf-8");
   const engine = migrateSource(source);
   // The WebGL renderer pass reads the compiled CSS, so RICS nesting and variables are resolved.
-  let compiled = engine.output;
+  let compiled = withoutBlock(engine.output);
   if (stylePath.endsWith(".rics")) {
+    let errors;
     try {
-      compiled = compileWithDetails(engine.output).css || "";
-    } catch {
-      compiled = "";
+      const result = compileWithDetails(compiled);
+      errors = result.errors.map((err) => err.message);
+      compiled = result.css;
+    } catch (e) {
+      errors = [e.message];
+    }
+    // Values read from half a theme would be wrong, so nothing is written from one.
+    if (errors.length > 0) {
+      console.log(pc.red(pc.bold("  style.rics does not compile, so nothing was migrated. Fix this and run migrate again:")));
+      errors.forEach((message) => console.log(pc.red(`    - ${message}`)));
+      console.log();
+      process.exit(1);
     }
   }
   const webgl = migrateForWebgl(engine.output, compiled);
@@ -1295,20 +1309,28 @@ const SKILL_END = "<!-- END better-lyrics-themes (create-bl-theme) -->";
 // The authoring guide lives in the extension repo and is fetched fresh on every
 // install so it never drifts from the canonical version. This package owns only
 // the migration guide (skills/MIGRATION.md).
-const AUTHORING_SKILL_RAW_URL =
-  "https://raw.githubusercontent.com/better-lyrics/better-lyrics/master/STYLING-SKILL.md";
+const AUTHORING_SKILL_RAW_URLS = [
+  // Until the WebGL renderer ships, the guide that describes it is on its branch; master's is for the
+  // DOM renderer, whose advice the WebGL migration guide contradicts. Once that branch is merged
+  // and gone, master's is the one.
+  ...(IS_PRERELEASE ? ["https://raw.githubusercontent.com/better-lyrics/better-lyrics/feat/rust-renderer/STYLING-SKILL.md"] : []),
+  "https://raw.githubusercontent.com/better-lyrics/better-lyrics/master/STYLING-SKILL.md",
+];
 const AUTHORING_SKILL_DOC_URL =
   "https://github.com/better-lyrics/better-lyrics/blob/master/STYLING-SKILL.md";
 
 async function fetchAuthoringSkill() {
-  try {
-    const res = await fetch(AUTHORING_SKILL_RAW_URL);
-    if (!res.ok) return null;
-    const text = await res.text();
-    return text.trim() ? text : null;
-  } catch {
-    return null;
+  for (const url of AUTHORING_SKILL_RAW_URLS) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (text.trim()) return text;
+    } catch {
+      return null; // Offline: the next would fail the same way.
+    }
   }
+  return null;
 }
 
 function assistantRegistry(dir, home) {
