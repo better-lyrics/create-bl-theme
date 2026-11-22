@@ -75,17 +75,21 @@ export function migrateForWebgl(source, css) {
   const flags = [];
   const unsupported = [];
   const rules = parseRules(stripComments(css));
+  const customs = customProperties(rules);
 
-  // 1. Distance effects, written as variables.
-  const lists = distanceLists(rules);
+  // 1. Distance effects and the hovered line, written as variables.
+  const lists = distanceLists(rules, customs);
+  const hover = hoverValues(rules, customs);
+  const written = [...lists.declarations, ...hover.declarations];
   let output = removeBlock(source);
-  if (lists.declarations.length > 0) {
+  if (written.length > 0) {
     const block = [
       BLOCK_BEGIN,
-      "/* Lines fade and blur by their distance from the sung line, as this theme's line rules do. The",
-      "   WebGL renderer reads these lists; the current renderer ignores them and keeps using the rules. */",
+      "/* This theme's line opacity, blur and hover rules as the WebGL renderer reads them: lines fade",
+      "   and blur by their distance from the sung line, and the line under the mouse takes the hover",
+      "   values. The current renderer ignores these and keeps using the rules. */",
       ".blyrics-container {",
-      ...lists.declarations.map((d) => `  ${d}`),
+      ...written.map((d) => `  ${d}`),
       "}",
       BLOCK_END,
     ].join("\n");
@@ -93,10 +97,10 @@ export function migrateForWebgl(source, css) {
     changes.push({
       line: lineOf(output, output.indexOf(BLOCK_BEGIN)),
       code: "distance-lists",
-      message: `Added ${lists.declarations.map((d) => d.split(":")[0]).join(", ")} from the theme's line opacity and blur rules. Watch a synced song to check the fade matches.`,
+      message: `Added ${written.map((d) => d.split(":")[0]).join(", ")} from the theme's line rules. Watch a synced song to check the fade${hover.declarations.length ? " and the hover" : ""} match.`,
     });
   }
-  for (const note of lists.notes) flags.push({ line: null, code: "distance-review", message: note });
+  for (const note of [...lists.notes, ...hover.notes]) flags.push({ line: null, code: "distance-review", message: note });
 
   // 2. What line rules do that the renderer cannot see. Read from the compiled CSS, where RICS
   //    nesting is flattened, so each finding names its full selector.
@@ -112,9 +116,13 @@ export function migrateForWebgl(source, css) {
     const pseudo = /::?(?:before|after)\b/.test(selector);
     const word = /\.blyrics--word\b|\.blyrics--letter\b|\.blyrics-word-highlight\b/.test(lastCompound(selector));
 
-    if (hover && /^(?:opacity|filter|transform|scale|color|background|text-shadow)/.test(property)) {
-      unsupported.push({ line, code: "hover", message: "Styling a line on `:hover` does not show: the canvas draws the lines, not their elements." });
-      return;
+    if (hover) {
+      // A hovered line's opacity, blur and scale are written as variables (above).
+      if (/^(?:opacity|filter|transform|scale)$/.test(property) && hoveredLine(selector)) return;
+      if (/^(?:opacity|filter|transform|scale|color|background|text-shadow)/.test(property)) {
+        unsupported.push({ line, code: "hover", message: hoveredLine(selector) ? `\`${property}\` on a hovered line does not show. The line under the mouse can only change its opacity, blur and scale (\`--blyrics-line-hover-opacity\`, \`-blur\`, \`-scale\`).` : "Hover effects other than on the hovered line itself (for example dimming the other lines while the mouse is over the lyrics) do not show in the WebGL renderer." });
+        return;
+      }
     }
     if (pseudo && property === "content") {
       unsupported.push({ line, code: "pseudo-content", message: "`::before` / `::after` content on lyric elements is not drawn by the WebGL renderer." });
@@ -252,12 +260,98 @@ function lineRole(selector) {
   return { before: notBefore ? null : [first, Infinity], after: notAfter ? null : [first, Infinity] };
 }
 
-function distanceLists(rules) {
+/**
+ * The selector without the `:hover` on its subject, when it picks the hovered line itself (any
+ * line, not one in a given state), or null.
+ */
+function hoveredLine(selector) {
+  const parts = compounds(selector);
+  if (parts.length === 0) return null;
+  const subject = parts[parts.length - 1].compound;
+  if (!/:hover\b/.test(subject) || parts.slice(0, -1).some((p) => /:hover\b/.test(p.compound))) return null;
+  const without = selector.replace(/:hover\b(?![\s\S]*:hover\b)/, "");
+  const role = lineRole(without);
+  if (!role) return null;
+  const all = (range) => range && range[0] === 0 && range[1] === Infinity;
+  return all(role.before) && all(role.after) ? without : null;
+}
+
+/** The hovered line's opacity, blur and scale, as `--blyrics-line-hover-*` declarations. */
+function hoverValues(rules, customs) {
+  const found = { opacity: [], blur: [], scale: [] };
+  const notes = [];
+  let order = 0;
+  for (const { selector, body } of rules) {
+    const declared = resolved(declarations(body), customs);
+    for (const one of splitTopLevel(selector, ",").flatMap((s) => expandIs(s.trim()))) {
+      if (!hoveredLine(one)) continue;
+      const meta = { specificity: specificity(one), order: order++ };
+      const add = (kind, raw, value) => {
+        if (raw === undefined) return;
+        if (value === null) {
+          notes.push(`Could not read \`${raw}\` on \`${one}\` into \`--blyrics-line-hover-${kind}\`; set it by hand.`);
+          return;
+        }
+        found[kind].push({ ...meta, value, important: /!important/.test(raw) });
+      };
+      add("opacity", declared.get("opacity"), declared.has("opacity") ? parseOpacity(declared.get("opacity")) : null);
+      add("blur", declared.get("filter"), declared.has("filter") ? parseBlur(declared.get("filter")) : null);
+      const transform = declared.get("transform");
+      if (transform !== undefined) add("scale", transform, parseScale(transform));
+      const scale = declared.get("scale");
+      if (scale !== undefined) add("scale", scale, parseOpacity(scale));
+    }
+  }
+  const out = [];
+  for (const kind of ["opacity", "blur", "scale"]) {
+    const value = winner(found[kind]);
+    if (value !== undefined) out.push(`--blyrics-line-hover-${kind}: ${value};`);
+  }
+  return { declarations: out, notes: [...new Set(notes)] };
+}
+
+/** The uniform scale of a transform made only of `scale(n)`, `none` meaning 1. */
+function parseScale(value) {
+  const v = value.replace(/!important/, "").trim();
+  if (v === "none") return "1";
+  const m = /^scale\(\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(v);
+  if (!m || (m[2] !== undefined && m[2] !== m[1])) return null;
+  return trimNumber(Number.parseFloat(m[1]));
+}
+
+/** Custom properties the theme sets on the page or the container, by name; the last one wins. */
+function customProperties(rules) {
+  const out = new Map();
+  for (const { selector, body } of rules) {
+    if (!splitTopLevel(selector, ",").some((s) => /^(?::root|html|body|\*|\.blyrics-container)$/.test(s.trim()))) continue;
+    for (const part of splitTopLevel(body, ";")) {
+      const i = part.indexOf(":");
+      const name = i < 0 ? "" : part.slice(0, i).trim();
+      if (name.startsWith("--")) out.set(name, part.slice(i + 1).trim());
+    }
+  }
+  return out;
+}
+
+/** `declared` with `var()` references to the theme's own custom properties filled in. */
+function resolved(declared, customs) {
+  const out = new Map();
+  for (const [name, value] of declared) {
+    let v = value;
+    for (let depth = 0; depth < 5 && /var\(/.test(v); depth++) {
+      v = v.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)/g, (m, ref, fallback) => customs.get(ref) ?? fallback?.trim() ?? m);
+    }
+    out.set(name, v);
+  }
+  return out;
+}
+
+function distanceLists(rules, customs) {
   const candidates = { opacity: [], blur: [] };
   const notes = [];
   let order = 0;
   for (const { selector, body } of rules) {
-    const declared = declarations(body);
+    const declared = resolved(declarations(body), customs);
     const opacity = declared.get("opacity");
     const filter = declared.get("filter");
     if (opacity === undefined && filter === undefined) continue;
@@ -282,10 +376,16 @@ function distanceLists(rules) {
   for (const [kind, rest] of [["opacity", "1"], ["blur", "0"]]) {
     lists[kind] = { before: sideList(candidates[kind], "before", rest), after: sideList(candidates[kind], "after", rest) };
   }
+  // A sung line the rules make invisible means the theme shows lyrics some other way (through
+  // per-word rules, say), which the renderer cannot draw; the lists would only hide everything.
+  if (Number(lists.opacity.after[0]) < 0.05) {
+    notes.push("This theme's line rules leave even the sung line transparent, so it shows lyrics through per-word or other rules the WebGL renderer does not draw. No distance lists were written: decide how lines should look with `--blyrics-line-opacity` / `--blyrics-line-blur` by hand.");
+    return { declarations: [], notes: [...new Set(notes)] };
+  }
   // Past the point where lines are fully transparent, their blur does not matter.
   for (const side of ["before", "after"]) {
     const op = lists.opacity[side];
-    if (op[op.length - 1] === "0") {
+    if (op.length > 1 && op[op.length - 1] === "0") {
       const gone = op.length - 1;
       const blur = lists.blur[side];
       if (blur.length > gone) lists.blur[side] = trimTail(blur.slice(0, gone));

@@ -98,7 +98,7 @@ npx create-bl-theme@latest migrate ./their-theme          # preview, nothing is 
 npx create-bl-theme@latest migrate ./their-theme --write  # apply the automatic fixes in place
 ```
 
-With `--write` it reads the theme's line opacity and blur rules and appends the matching distance lists (below) in a block marked `create-bl-theme migrate: WebGL renderer`. Re-running replaces that block. The current DOM renderer ignores these variables, so a migrated theme works on both renderers: keep the old rules until the WebGL renderer has shipped.
+With `--write` it reads the theme's line opacity, blur and `:hover` rules and appends the matching distance lists and hover values (below) in a block marked `create-bl-theme migrate: WebGL renderer`. Re-running replaces that block. The current DOM renderer ignores these variables, so a migrated theme works on both renderers: keep the old rules until the WebGL renderer has shipped.
 
 ### What still works
 
@@ -112,7 +112,7 @@ With `--write` it reads the theme's line opacity and blur rules and appends the 
 - `animation`, `transition` and `@keyframes` on lyric elements. The renderer times its own effects.
 - `::before` / `::after` on lyric elements.
 - The state classes are never set: `.blyrics--active`, `.blyrics--animating`, `.blyrics--paused` and `[data-word-state]` match nothing, so rules keyed off them do nothing. `.blyrics-user-scrolling` is still set on the container.
-- `:hover` on lines.
+- `:hover` on lines, except the opacity, blur and scale of the hovered line, which have variables (below).
 
 ### The replacements
 
@@ -138,6 +138,20 @@ With `--write` it reads the theme's line opacity and blur rules and appends the 
 | `.blyrics--line:has(~ .blyrics--active) { opacity: 0 }` | `--blyrics-line-opacity-before: 1 0` |
 | `.blyrics--active + .blyrics--line { filter: blur(2px) }`, `+ .blyrics--line + .blyrics--line { filter: blur(4px) }` | `--blyrics-line-blur-after: 0 2px 4px` |
 | `visibility: hidden` / `opacity: 0` past some distance | end the opacity list with `0` |
+
+**The line under the mouse.** A `.blyrics--line:hover` rule's opacity, blur and scale become:
+
+```css
+.blyrics-container {
+  --blyrics-line-hover-opacity: 1;
+  --blyrics-line-hover-blur: 0;
+  --blyrics-line-hover-scale: 1.02;
+  --blyrics-line-hover-duration: 0.2s; /* default */
+  --blyrics-line-hover-easing: ease;   /* default */
+}
+```
+
+Each one replaces the line's own value (its distance opacity, its distance blur, its scale) while the pointer is on it; leave one unset to keep the line's own. Nothing else about a hovered line can change, and touch has no hover. Rules that change other lines while the mouse is over the lyrics (`.blyrics-container:hover > div:not(:hover)`) have no equivalent.
 
 **Colours.** Set variables, not `color`:
 - `--blyrics-lyric-inactive-color`: words not yet sung.
@@ -168,7 +182,7 @@ With `--write` it reads the theme's line opacity and blur rules and appends the 
 ### When something has no equivalent: ask
 
 Some effects have no variable yet:
-- hover styles on lines
+- hover styles beyond the hovered line's opacity, blur and scale
 - text shadows, outlines, strokes, backgrounds or borders on lyrics
 - filters other than `blur()`
 - per-word opacity or styles keyed off a word's state
