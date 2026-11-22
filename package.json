@@ -1,6 +1,6 @@
 {
   "name": "create-bl-theme",
-  "version": "1.1.1",
+  "version": "1.2.0-beta.0",
   "description": "CLI tool to scaffold Better Lyrics themes",
   "type": "module",
   "bin": {
@@ -11,8 +11,12 @@
     "templates",
     "skills"
   ],
+  "publishConfig": {
+    "tag": "beta"
+  },
   "scripts": {
-    "start": "node bin/cli.js"
+    "start": "node bin/cli.js",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "better-lyrics",

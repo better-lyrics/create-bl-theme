@@ -1,5 +1,8 @@
 ## Migrating a theme from the old animation engine
 
+> [!NOTE]
+> This section is about today's DOM renderer. Where it disagrees with [Migrating a theme to the WebGL renderer](#migrating-a-theme-to-the-webgl-renderer) below (state classes, `::after`, transitions, glow filters), that section is right for the WebGL renderer.
+
 Older themes were written for the previous engine, which animated by toggling CSS classes and writing `transition-delay` values. The current engine uses the Web Animations API and normal inline text flow. If a user's existing theme references any of the removed hooks below, migrate it.
 
 The fastest path is the CLI, which applies the mechanical rewrites and flags the rest:
@@ -94,11 +97,19 @@ Better Lyrics is moving to a WebGL renderer (`@braccato/core` 2). It draws the l
 The CLI does the mechanical part and flags the rest:
 
 ```sh
-npx create-bl-theme@latest migrate ./their-theme          # preview, nothing is written
-npx create-bl-theme@latest migrate ./their-theme --write  # apply the automatic fixes in place
+npx create-bl-theme@beta migrate ./their-theme          # preview, nothing is written
+npx create-bl-theme@beta migrate ./their-theme --write  # apply the automatic fixes in place
 ```
 
-With `--write` it reads the theme's line opacity, blur and `:hover` rules and appends the matching distance lists and hover values (below) in a block marked `create-bl-theme migrate: WebGL renderer`. Re-running replaces that block. The current DOM renderer ignores these variables, so a migrated theme works on both renderers: keep the old rules until the WebGL renderer has shipped.
+With `--write` it reads the theme's line opacity, blur and `:hover` rules and appends the matching distance lists and hover values (below) in a block marked `create-bl-theme migrate: WebGL renderer`. Re-running updates that block in place. The current DOM renderer ignores these variables, so a migrated theme works on both renderers: keep the old rules until the WebGL renderer has shipped.
+
+It writes a value only where the CSS cascade settles it. It leaves these to you, with a review note:
+- rules inside media, container and support queries;
+- rules for one view (fullscreen, Picture-in-Picture, video mode) or only some lines (`:first-child`, `:empty`, one `data-agent`);
+- values it cannot read, such as `calc()`, `em` blurs or variables set outside `:root` and the container;
+- hover values that differ from line to line, or that would show lines the theme hides from the mouse.
+
+It never replaces a `--blyrics-line-*` value the theme already sets, and it writes nothing for a `.rics` file that does not compile.
 
 ### What still works
 

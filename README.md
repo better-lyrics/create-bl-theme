@@ -2,6 +2,9 @@
 
 CLI tool to scaffold [Better Lyrics](https://github.com/better-lyrics/better-lyrics) themes.
 
+> [!IMPORTANT]
+> This is the beta, from the `next` branch, for Better Lyrics' upcoming WebGL renderer: run it as `npx create-bl-theme@beta`. `@latest` is the stable release, and its `migrate` does not know about the WebGL renderer.
+
 ## Installation
 
 ```bash
@@ -78,8 +81,15 @@ Most themes need nothing: every color, font, and layout variable is preserved. S
 Better Lyrics is moving to a WebGL renderer that draws the lyrics on a canvas. Theme variables and comment settings still apply. Rules that paint the lyric elements themselves do not: opacity, filters, transforms, colors, shadows and animations on lines and words, and anything keyed off `.blyrics--active` or `.blyrics--animating`. The same `migrate` command covers it:
 
 - **Writes automatically:** it reads your line opacity and blur rules (the "dim and blur lines around the sung one" effect most themes have) and appends the equivalent `--blyrics-line-opacity-*` / `--blyrics-line-blur-*` lists, plus your `:hover` rules' opacity, blur and scale as `--blyrics-line-hover-*`. The current renderer ignores these, so the theme keeps working on both.
+- **Leaves to you, with a note:** what one list for every line can't say (media queries, single views or lines, values it can't read). It never replaces values you wrote.
 - **Flags with a replacement:** colors, scale and spacing, which have variables.
 - **Flags as not possible yet:** effects the renderer has no equivalent for, such as text shadows, non-blur filters and hover styles beyond opacity, blur and scale. If your theme needs one, ask in the [Better Lyrics Discord](https://discord.gg/UsHE3d5fWF) so it can be added to the renderer.
+
+```bash
+# Preview, then apply
+npx create-bl-theme@beta migrate
+npx create-bl-theme@beta migrate --write
+```
 
 The mapping is in [skills/MIGRATION.md](skills/MIGRATION.md), which `create-bl-theme skill` also installs for your AI assistant.
 
