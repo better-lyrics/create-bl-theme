@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import { imageSize } from "image-size";
 import { execSync, spawn } from "child_process";
 import { compileWithDetails } from "rics";
+import { DISCORD_URL, migrateForWebgl, withoutBlock } from "./webgl.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,6 +33,10 @@ const pkg = JSON.parse(
 );
 
 // Cross-platform browser opener
+const IS_PRERELEASE = pkg.version.includes("-");
+/** How to run this release through npx. */
+const NPX = `npx create-bl-theme@${IS_PRERELEASE ? "beta" : "latest"}`;
+
 function openBrowser(url) {
   const platform = process.platform;
   let command;
@@ -156,7 +161,7 @@ ${pc.bold("Usage:")}
   ${pc.cyan("create-bl-theme")} validate [dir|url]  Validate a theme (local or GitHub)
   ${pc.cyan("create-bl-theme")} publish [dir]       Check publishing status
   ${pc.cyan("create-bl-theme")} bump [type] [dir]   Bump version (patch, minor, major)
-  ${pc.cyan("create-bl-theme")} migrate [dir|file]  Migrate a theme to the new animation engine
+  ${pc.cyan("create-bl-theme")} migrate [dir|file]  Migrate a theme to the current engine and the WebGL renderer
   ${pc.cyan("create-bl-theme")} skill [dir]         Install the theme skill into your AI assistants
 
 ${pc.bold("Options:")}
@@ -464,7 +469,7 @@ MIT
   console.log(`  ${pc.dim("Submit Theme:")}   https://github.com/better-lyrics/themes`);
   console.log();
   console.log(
-    pc.dim("  Validate your theme with: ") + pc.cyan(`npx create-bl-theme@latest validate ${dir}`)
+    pc.dim("  Validate your theme with: ") + pc.cyan(`${NPX} validate ${dir}`)
   );
   console.log();
 }
@@ -1058,16 +1063,40 @@ async function migrate(target, { write } = {}) {
   }
 
   const source = fs.readFileSync(stylePath, "utf-8");
-  const { output, changes, flags } = migrateSource(source);
+  const engine = migrateSource(source);
+  // The WebGL renderer pass reads the compiled CSS, so RICS nesting and variables are resolved.
+  let compiled = withoutBlock(engine.output);
+  if (stylePath.endsWith(".rics")) {
+    let errors;
+    try {
+      const result = compileWithDetails(compiled);
+      errors = result.errors.map((err) => err.message);
+      compiled = result.css;
+    } catch (e) {
+      errors = [e.message];
+    }
+    // Values read from half a theme would be wrong, so nothing is written from one.
+    if (errors.length > 0) {
+      console.log(pc.red(pc.bold("  style.rics does not compile, so nothing was migrated. Fix this and run migrate again:")));
+      errors.forEach((message) => console.log(pc.red(`    - ${message}`)));
+      console.log();
+      process.exit(1);
+    }
+  }
+  const webgl = migrateForWebgl(engine.output, compiled);
+  const output = webgl.output;
+  const changes = [...engine.changes, ...webgl.changes];
+  const flags = [...engine.flags, ...webgl.flags.map(placed)];
+  const unsupported = webgl.unsupported.map(placed);
 
   const rel = path.relative(process.cwd(), stylePath);
   const shown = rel && !rel.startsWith("..") ? rel : stylePath;
 
   console.log(pc.bold(`  Migrating ${pc.cyan(shown)}`));
-  console.log(pc.dim(`  auto-applied: ${changes.length}    needs review: ${flags.length}`));
+  console.log(pc.dim(`  auto-applied: ${changes.length}    needs review: ${flags.length}    not possible yet: ${unsupported.length}`));
   console.log();
 
-  if (changes.length === 0 && flags.length === 0) {
+  if (changes.length === 0 && flags.length === 0 && unsupported.length === 0) {
     console.log(pc.green("  Nothing to migrate. This theme only uses stable selectors and variables."));
     console.log();
     return;
@@ -1081,7 +1110,16 @@ async function migrate(target, { write } = {}) {
 
   if (flags.length > 0) {
     console.log(pc.yellow(pc.bold("  Needs review (not changed):")));
-    flags.forEach((f) => console.log(pc.yellow(`    L${f.line}  `) + f.message));
+    flags.forEach((f) => console.log(pc.yellow(`    ${f.at}  `) + f.message));
+    console.log();
+  }
+
+  if (unsupported.length > 0) {
+    console.log(pc.magenta(pc.bold("  Not possible in the WebGL renderer yet:")));
+    unsupported.forEach((f) => console.log(pc.magenta(`    ${f.at}  `) + f.message));
+    console.log();
+    console.log(pc.magenta("  If your theme needs one of these, ask in the Better Lyrics Discord so it can be added to"));
+    console.log(pc.magenta("  the renderer: ") + pc.cyan(DISCORD_URL));
     console.log();
   }
 
@@ -1117,6 +1155,16 @@ async function migrate(target, { write } = {}) {
     console.log(pc.yellow("  Resolve the review items above by hand, then run ") + pc.cyan("validate") + pc.yellow("."));
   }
   console.log();
+}
+
+/** A WebGL pass finding with `at`, where it applies, in the shape the old-engine flags print. */
+function placed(item) {
+  const where = item.where.filter(Boolean);
+  if (where.length === 0) return { ...item, at: "" };
+  // A selector's end says which elements it picks, so long ones keep their end.
+  const shown = where.slice(0, 2).map((w) => (w.length > 70 ? `...${w.slice(-67)}` : w));
+  const more = where.length > 2 ? ` (+${where.length - 2} more)` : "";
+  return { ...item, at: `${shown.join(", ")}${more}\n     ` };
 }
 
 // Pure transform: returns { output, changes, flags }.
@@ -1186,7 +1234,7 @@ function migrateSource(source) {
   scanFlags(out, flags, /--blyrics-anim-delay/g, "dead-var-residual", "Leftover `--blyrics-anim-delay` reference the auto-pass could not simplify (nested fallback?). Replace it with a static delay; the engine no longer sets this variable.");
 
   dedupeFlags(flags);
-  return { output: out, changes, flags };
+  return { output: out, changes, flags: flags.map((f) => ({ ...f, at: `L${f.line}` })) };
 }
 
 function compoundAround(text, index) {
@@ -1254,27 +1302,35 @@ function dedupeFlags(flags) {
 
 const SKILL_NAME = "better-lyrics-themes";
 const SKILL_DESCRIPTION =
-  "Better Lyrics theme development: selectors, CSS variables, DOM structure, and old-to-new animation engine migration. Use when creating, editing, or migrating a Better Lyrics theme (.rics or .css).";
+  "Better Lyrics theme development: selectors, CSS variables, DOM structure, and migration from the old animation engine and to the WebGL renderer. Use when creating, editing, or migrating a Better Lyrics theme (.rics or .css).";
 const SKILL_BEGIN = "<!-- BEGIN better-lyrics-themes (create-bl-theme) -->";
 const SKILL_END = "<!-- END better-lyrics-themes (create-bl-theme) -->";
 
 // The authoring guide lives in the extension repo and is fetched fresh on every
 // install so it never drifts from the canonical version. This package owns only
 // the migration guide (skills/MIGRATION.md).
-const AUTHORING_SKILL_RAW_URL =
-  "https://raw.githubusercontent.com/better-lyrics/better-lyrics/master/STYLING-SKILL.md";
+const AUTHORING_SKILL_RAW_URLS = [
+  // Until the WebGL renderer ships, the guide that describes it is on its branch; master's is for the
+  // DOM renderer, whose advice the WebGL migration guide contradicts. Once that branch is merged
+  // and gone, master's is the one.
+  ...(IS_PRERELEASE ? ["https://raw.githubusercontent.com/better-lyrics/better-lyrics/feat/rust-renderer/STYLING-SKILL.md"] : []),
+  "https://raw.githubusercontent.com/better-lyrics/better-lyrics/master/STYLING-SKILL.md",
+];
 const AUTHORING_SKILL_DOC_URL =
   "https://github.com/better-lyrics/better-lyrics/blob/master/STYLING-SKILL.md";
 
 async function fetchAuthoringSkill() {
-  try {
-    const res = await fetch(AUTHORING_SKILL_RAW_URL);
-    if (!res.ok) return null;
-    const text = await res.text();
-    return text.trim() ? text : null;
-  } catch {
-    return null;
+  for (const url of AUTHORING_SKILL_RAW_URLS) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (text.trim()) return text;
+    } catch {
+      return null; // Offline: the next would fail the same way.
+    }
   }
+  return null;
 }
 
 function assistantRegistry(dir, home) {
