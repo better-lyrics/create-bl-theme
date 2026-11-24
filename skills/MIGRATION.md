@@ -103,10 +103,13 @@ npx create-bl-theme@beta migrate ./their-theme --write  # apply the automatic fi
 
 With `--write` it appends the variables below in a block marked `create-bl-theme migrate: WebGL renderer`. Re-running updates that block in place. The current DOM renderer ignores these variables, so a migrated theme works on both renderers: keep the old rules until the WebGL renderer has shipped. It writes:
 - the distance lists and hover values, from the theme's line `opacity`, `filter` (`blur()`, `saturate()`, `brightness()`) and `:hover` rules;
+- `--blyrics-line-hover-color`, from the colour a hovered line gives its words: `color` on `.blyrics--line:hover` or its `.blyrics--word`s, or `--blyrics-lyric-inactive-color` in a `.blyrics--line:hover` rule, with or without `:not(.blyrics--active)`;
 - `--blyrics-line-opacity-browsing`, from a rule that dims the other lines while the mouse is over the lyrics;
 - `--blyrics-word-past-opacity`, from `[data-word-state="past"]` opacity in the sung line;
 - `--blyrics-word-rest-transform`, from a word transform that `.blyrics--animating` (or an animation on sung words) undoes;
 - `--blyrics-text-shadow`, from each `text-shadow` on lyric text whose selector has no state;
+- `--blyrics-romanized-bg-color`, from each `background` or `background-color` on `.blyrics--romanized` whose selector has no state (`none` and `0` become `transparent`);
+- the comment setting `blyrics-long-word-max-letters = N;`, when the theme waves held words' letters only inside `@container style(--letters: 1) or … style(--letters: N)`;
 - the `--blyrics-*` variables a theme sets on `.blyrics--word::after`, copied onto the matching `.blyrics--word` selector;
 - `--blyrics-instrumental-icon`, from the note a theme draws on the instrumental line's `::before` / `::after` (or the empty line's `.blyrics-line-main::before`), and `--blyrics-instrumental-pulse-scale` / `-duration`, from the scale of the animation that note runs while the line is sung;
 - `--blyrics-no-lyrics-text` and `--blyrics-no-lyrics-icon`, from the `content` of `.blyrics-container[data-no-lyrics="true"] .blyrics--line::after` and `::before`, with the icon's `font-size` and `color` on `.blyrics-no-lyrics-icon` and the message's `font-size` and `font-weight` on the no-lyrics line.
@@ -117,9 +120,10 @@ It writes a value only where the CSS cascade settles it. It leaves these to you,
 - rules inside media, container and support queries;
 - rules for one view (fullscreen, Picture-in-Picture, video mode) or only some lines (`:first-child`, `:empty`, one `data-agent`);
 - values it cannot read, such as `min()`/`clamp()`, `calc()` mixing units, `em` blurs, or variables set elsewhere;
-- hover and browsing values that differ from line to line, or that would show lines the theme hides from the mouse.
+- hover and browsing values that differ from line to line, or that would show lines the theme hides from the mouse;
+- `blyrics-letter-wave = long;`, for a theme that waves the letters of held words only. The current renderer reads `long` as `false` and splits no word into letters, so the CLI names the setting and leaves it for when the theme is for the WebGL renderer only.
 
-It never replaces a `--blyrics-*` value the theme already sets, and it writes nothing for a `.rics` file that does not compile. The preview lists the WebGL findings first, then, under their own heading, what the old animation engine's rules still need for the current DOM renderer.
+It never replaces a `--blyrics-*` value or comment setting the theme already sets, and it writes nothing for a `.rics` file that does not compile. The preview lists the WebGL findings first, then, under their own heading, what the old animation engine's rules still need for the current DOM renderer.
 
 ### What still works
 
@@ -133,7 +137,7 @@ It never replaces a `--blyrics-*` value the theme already sets, and it writes no
 - `animation`, `transition` and `@keyframes` on lyric elements. The renderer times its own effects.
 - `::before` / `::after` on lyric elements. The word's `::after` was the DOM renderer's sweep overlay; the WebGL renderer draws the sweep itself, so rules that only tuned it (`animation: none` and the like) need nothing. A note on instrumental lines and the no-lyrics message and icon have variables (below).
 - The state classes are never set: `.blyrics--active`, `.blyrics--animating`, `.blyrics--paused` and `[data-word-state]` match nothing, so rules keyed off them do nothing, and variables set under them are never read. `.blyrics-user-scrolling` is still set on the container.
-- `:hover` on lines, except the opacity, blur and scale of the hovered line and the opacity of the others, which have variables (below).
+- `:hover` on lines, except the opacity, blur, scale and word colour of the hovered line and the opacity of the others, which have variables (below).
 
 ### The replacements
 
@@ -161,20 +165,24 @@ It never replaces a `--blyrics-*` value the theme already sets, and it writes no
 | `.blyrics--active + .blyrics--line { filter: blur(2px) }`, `+ .blyrics--line + .blyrics--line { filter: blur(4px) }` | `--blyrics-line-blur-after: 0 2px 4px` |
 | `.blyrics--line:not(.blyrics--active) { filter: saturate(80%) brightness(.6) }` | `--blyrics-line-saturate: 1 0.8` and `--blyrics-line-brightness: 1 0.6` |
 | `visibility: hidden` / `opacity: 0` past some distance | end the opacity list with `0` |
+| `.blyrics--line:not(.blyrics--active):hover { --blyrics-lyric-inactive-color: #fffc }` | `--blyrics-line-hover-color: #fffc` |
+| `.blyrics--romanized { background: none }` | `.blyrics--romanized { --blyrics-romanized-bg-color: transparent }` |
+| `.blyrics--word:not([data-long-word]) .blyrics--letter { animation: none }` | `/* blyrics-letter-wave = long; */` (by hand, see below) |
 
-**The line under the mouse.** A `.blyrics--line:hover` rule's opacity, blur and scale become:
+**The line under the mouse.** A `.blyrics--line:hover` rule's opacity, blur, scale and word colour become:
 
 ```css
 .blyrics-container {
   --blyrics-line-hover-opacity: 1;
   --blyrics-line-hover-blur: 0;
   --blyrics-line-hover-scale: 1.02;
+  --blyrics-line-hover-color: rgb(255 255 255 / 0.75);
   --blyrics-line-hover-duration: 0.2s; /* default */
   --blyrics-line-hover-easing: ease;   /* default */
 }
 ```
 
-Each one replaces the line's own value (its distance opacity, its distance blur, its scale) while the pointer is on it; leave one unset to keep the line's own. Nothing else about a hovered line can change, and touch has no hover. A `:hover` on the container as well (`.blyrics-container:hover > div:hover`) changes nothing, since the container is hovered whenever a line is.
+Each one replaces the line's own value (its distance opacity, its distance blur, its scale) while the pointer is on it; leave one unset to keep the line's own. `--blyrics-line-hover-color` is the colour the hovered line's words take before they are sung (their `--blyrics-lyric-inactive-color`); the sung part, translations and romanizations keep theirs, and setting it alone turns hover on. It applies to the sung line too when that is hovered, so a sung line's own hover colour (`.blyrics--active:hover`) does not carry over. Nothing else about a hovered line can change, and touch has no hover. A `:hover` on the container as well (`.blyrics-container:hover > div:hover`) changes nothing, since the container is hovered whenever a line is.
 
 **The other lines while the reader browses.** While the pointer is over the lyrics or the reader scrolls, every line but the sung and hovered ones eases to `--blyrics-line-opacity-browsing` (a number or percentage, unset by default) over `--blyrics-line-hover-duration`. It replaces:
 
@@ -208,6 +216,8 @@ Words still to come take the alpha of `--blyrics-lyric-inactive-color`, and the 
 The `translate` and `scale` properties on waiting words (`[data-word-state="upcoming"]`) carry over the same way, as `translateY(…) scale(…)`.
 
 **Text shadow.** `--blyrics-text-shadow` takes `text-shadow` syntax and is drawn once under the text of lines, words, translations and romanizations. It is read per element and is static: the same whether a line is sung, hovered or neither. So `.blyrics--translated { text-shadow: 0 2px 12px rgb(0 0 0 / .12) }` becomes `.blyrics--translated { --blyrics-text-shadow: 0 2px 12px rgb(0 0 0 / .12) }`, and a shadow that changes with state has no equivalent.
+
+**Romanization background.** The rounded box the renderer draws behind a romanization is `--blyrics-romanized-bg-color` (default `rgb(255 255 255 / 0.145)`; `transparent` draws none), with the radius of `.blyrics--romanized`'s `border-radius`. It is read per element, so `.blyrics--line > .blyrics--romanized { background: none }` becomes `.blyrics--line > .blyrics--romanized { --blyrics-romanized-bg-color: transparent }`. Only a colour is drawn: a gradient or image is not, nor a background that changes with state.
 
 **The instrumental icon.** `--blyrics-instrumental-icon` picks what instrumental lines show: `note` (the default, filling from the bottom), `dots` (Apple Music's three dots, lit one after another over the instrumental) or a CSS string such as `"♫"` or `"\266B"`, drawn at the line's font size, filling from the bottom and glowing like the note. While the instrumental plays, the icon swells to `--blyrics-instrumental-pulse-scale` (default 1, no pulse) and back once every `--blyrics-instrumental-pulse-duration` (default `1.5s`). They are read once from `.blyrics-container`.
 
@@ -257,7 +267,11 @@ The CLI writes the message's `font-size` and `font-weight` onto the line only wh
 - Colour: `--blyrics-glow-color`, which can vary per word as above. It is read from the word, so set it on `.blyrics--word`, not its `::after`.
 - `--blyrics-highlight-glow-filter-from/-to` are not read.
 
-**Word motion.** `--blyrics-word-wobble-transform-{from,peak,settle,to}`, `--blyrics-letter-wave-*`, the swipe stops `--blyrics-highlight-swipe-*`, and the `--blyrics-animate-*` switches all apply. Transforms there take translations and scales; rotations and skews are ignored.
+**Word motion.** `--blyrics-word-wobble-transform-{from,peak,settle,to}`, `--blyrics-letter-wave-*`, the swipe stops `--blyrics-highlight-swipe-*`, and the `--blyrics-animate-*` switches all apply. Transforms there take translations and scales; rotations and skews are ignored. Every easing variable takes `linear()` as well as the keywords, `cubic-bezier()` and `steps()`, so spring curves can be written directly.
+
+- `--blyrics-word-wobble-scope: syllable` wobbles each syllable on its own, from its own start, about its own centre (`word`, the default, wobbles the word once from its first syllable). `--blyrics-word-wobble-duration-ratio` (default 0) lengthens the wobble by that many times the syllable's duration (the word's, in `word` scope).
+- Held words (`[data-long-word]`: sung for longer than `blyrics-long-word-threshold`) can do more. `--blyrics-letter-wave-spread` (a length, default 0) moves their letters apart at the wave's crest, the outermost by that length, and `--blyrics-letter-wave-glow` (a number, default 0) brightens each letter's glow at its crest (`1` is twice as bright). The comment setting `blyrics-long-word-max-letters = N;` keeps words of more than N letters from being held, however long they are sung.
+- `blyrics-letter-wave = long;` splits only held words into letters and waves those; other words move as one piece. It is what a theme that turned the DOM renderer's letter animation off for other words (`.blyrics--word:not([data-long-word]) .blyrics--letter { animation: none }`), or ran its own only on `[data-long-word]` letters, wants. The current renderer reads `long` as `false` and splits no word at all, so the CLI flags it instead of writing it: switch the setting once the theme is for the WebGL renderer only. Keyframes a theme runs on letters are not read, so their spread and glow have to be set by hand too.
 
 **Variables the WebGL renderer does not read:**
 - `--blyrics-highlight-glow-filter-*`
@@ -271,8 +285,8 @@ The CLI writes the message's `font-size` and `font-weight` onto the line only wh
 ### When something has no equivalent: ask
 
 Some effects have no variable yet:
-- hover styles beyond the hovered line's opacity, blur and scale and the other lines' opacity
-- text shadows that change with state, and outlines, strokes, backgrounds or borders on lyrics
+- hover styles beyond the hovered line's opacity, blur, scale and word colour and the other lines' opacity
+- text shadows that change with state, and outlines, strokes, borders or backgrounds on lyrics (other than the romanization's background colour)
 - filters other than `blur()`, `saturate()` and `brightness()`
 - per-word opacity other than sung words in the sung line, or other styles keyed off a word's state
 - `::before` / `::after` decorations other than the instrumental icon and the no-lyrics message

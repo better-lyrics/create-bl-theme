@@ -13,12 +13,13 @@
 // blurring, desaturating and darkening lines by where they are relative to the
 // sung one are lists: `--blyrics-line-opacity[-before|-after]` and the `-blur`,
 // `-saturate` and `-brightness` lists beside it, of values for the sung line,
-// then 1, 2, 3... lines away. The hovered line, the other lines while the
-// reader browses, a word's pose until it is sung, its opacity once sung, a
-// static text shadow, the instrumental icon and its pulse, and the no-lyrics
-// message and its icon each have a variable too. This pass reads the theme's
-// rules and writes those variables, which the current DOM renderer ignores, so
-// the theme keeps working on both.
+// then 1, 2, 3... lines away. The hovered line and its colour, the other lines
+// while the reader browses, a word's pose until it is sung, its opacity once
+// sung, a static text shadow, the romanization's background, the instrumental
+// icon and its pulse, and the no-lyrics message and its icon each have a
+// variable too, and a cap on the letters of a held word has a comment setting.
+// This pass reads the theme's rules and writes those, which the current DOM
+// renderer ignores, so the theme keeps working on both.
 //
 // The renderer reads the line variables once, from the container, which says
 // whether the song is word-synced (`data-sync="richsync"`) or line-synced
@@ -126,16 +127,18 @@ export function migrateForWebgl(source, css) {
   const covered = new Set();
   const cover = (selector, property) => covered.add(`${selector}\n${property}`);
   const customs = Object.fromEntries(SYNCS.map((sync) => [sync, customProperties(rules, sync)]));
+  const keyframes = parseKeyframes(withoutBlock(css));
 
   // 1. What the renderer reads from the container, worked out for each sync type: the distance
   //    lists, the hovered line, the lines while browsing, the words' rise.
   const words = wordValues(rules, customs, authored, review, cover);
-  const instrumental = instrumentalValues(rules, parseKeyframes(withoutBlock(css)), authored, review, cover);
+  const instrumental = instrumentalValues(rules, keyframes, authored, review, cover);
   const perSync = SYNCS.map((sync) => {
     const candidates = lineCandidates(rules, customs[sync], sync, review);
     return [
       ...distanceLists(candidates, authored, review),
       ...hoverValues(candidates, authored, review),
+      ...hoverColor(rules, customs[sync], sync, authored, review, unsupported, cover),
       ...browsingValue(rules, customs[sync], sync, candidates, authored, review, cover),
       ...words.themeWide,
       ...instrumental,
@@ -145,8 +148,16 @@ export function migrateForWebgl(source, css) {
   // 2. What it reads from each element, under the theme's own selectors.
   const pseudo = pseudoVariables(rules, review);
   const noLyrics = noLyricsValues(rules, authored, review, cover);
-  const groups = [...withContainer(themeWide(perSync), noLyrics.container), ...words.groups, ...textShadows(rules, authored, review, unsupported, cover), ...pseudo.groups, ...noLyrics.groups];
-  const { output, change } = withBlock(source, groups);
+  const settings = letterSettings(rules, keyframes, commentSettings(withoutBlock(css)), authored, review, cover);
+  const groups = [
+    ...withContainer(themeWide(perSync), noLyrics.container),
+    ...words.groups,
+    ...textShadows(rules, authored, review, unsupported, cover),
+    ...romanizedBackgrounds(rules, authored, review, unsupported, cover),
+    ...pseudo.groups,
+    ...noLyrics.groups,
+  ];
+  const { output, change } = withBlock(source, groups, settings);
   if (change) changes.push(change);
 
   // 3. What lyric rules do that the renderer cannot see. Read from the compiled CSS, where RICS
@@ -173,7 +184,7 @@ export function migrateForWebgl(source, css) {
       if (!line_) {
         unsupported.push({ line, code: "hover", message: "Hover effects other than on the hovered line itself and the opacity of the other lines (for example blurring the other lines while the mouse is over the lyrics) do not show in the WebGL renderer." });
       } else if (otherFilter || !/^(?:opacity|filter|transform|scale)$/.test(property)) {
-        unsupported.push({ line, code: "hover", message: `\`${property}\` on a hovered line does not show. The line under the mouse can only change its opacity, blur and scale (\`--blyrics-line-hover-opacity\`, \`-blur\`, \`-scale\`).` });
+        unsupported.push({ line, code: "hover", message: `\`${property}\` on a hovered line does not show. The line under the mouse can only change its opacity, blur, scale and the colour of its words before they are sung (\`--blyrics-line-hover-opacity\`, \`-blur\`, \`-scale\` and \`--blyrics-line-hover-color\`).` });
       }
       return;
     }
@@ -209,7 +220,19 @@ export function migrateForWebgl(source, css) {
       case "animation-name":
       case "transition":
       case "transition-property":
-        flags.push({ line, code: "motion", message: "Animations and transitions on lyric elements do not run in the WebGL renderer; it times its own effects. Its timing variables are `--blyrics-scale-transition-duration`, `--blyrics-lyric-highlight-fade-in/out-duration`, `--blyrics-wobble-duration` and the easing variables beside them. A custom keyframe effect has no equivalent." });
+        flags.push({ line, code: "motion", message: "Animations and transitions on lyric elements do not run in the WebGL renderer; it times its own effects. Its timing variables are `--blyrics-scale-transition-duration`, `--blyrics-lyric-highlight-fade-in/out-duration`, `--blyrics-wobble-duration` (stretched with the word by `--blyrics-word-wobble-duration-ratio`, and per syllable with `--blyrics-word-wobble-scope: syllable`) and the easing variables beside them, which take `linear()` curves. A custom keyframe effect has no equivalent." });
+        return;
+      case "background":
+      case "background-color":
+        // What draws nothing is not lost.
+        if (backgroundFill(property, value) === "transparent") return;
+        unsupported.push({
+          line,
+          code: "paint",
+          message: simples(lastCompound(selector)).includes(".blyrics--romanized")
+            ? `\`${property}\` on romanizations is drawn only as a colour, from \`--blyrics-romanized-bg-color\` (the rounded box behind them); an image or gradient is not drawn by the WebGL renderer.`
+            : `\`${property}\` on lyric elements is not drawn by the WebGL renderer (it paints text, its shadow, the glow and image highlights only).`,
+        });
         return;
       case "box-shadow":
       case "-webkit-text-stroke":
@@ -218,8 +241,6 @@ export function migrateForWebgl(source, css) {
       case "outline":
       case "border":
       case "border-color":
-      case "background":
-      case "background-color":
       case "background-image":
       case "background-clip":
       case "mix-blend-mode":
@@ -263,12 +284,15 @@ export function migrateForWebgl(source, css) {
 
 // -- The block -------------------------------------------------------------
 
-/** `groups` is [{ selector, declarations }], in the order they are to be written. */
-function withBlock(source, groups) {
+/**
+ * `groups` is [{ selector, declarations }], in the order they are to be written; `settings` the
+ * comment settings (`blyrics-key = value`) to write before them.
+ */
+function withBlock(source, groups, settings = []) {
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
   const existing = BLOCK.exec(source);
   const at = existing ? lineOf(source, existing.index) : 0;
-  if (groups.length === 0) {
+  if (groups.length === 0 && settings.length === 0) {
     if (!existing) return { output: source, change: null };
     const before = source.slice(0, existing.index).trimEnd();
     const after = source.slice(existing.index + existing[0].length).trimStart();
@@ -283,6 +307,7 @@ function withBlock(source, groups) {
     "   distance from the sung line, the line under the mouse takes the hover values, and words,",
     "   their shadows, the instrumental icon and the no-lyrics message take the variables below.",
     "   The current renderer ignores these and keeps using the rules. */",
+    ...settings.map((setting) => `/* ${setting}; */`),
     ...groups.flatMap(({ selector, declarations }) => [`${selector} {`, ...declarations.map((d) => `  ${d}`), "}"]),
     BLOCK_END,
   ].join(newline);
@@ -300,14 +325,15 @@ function withBlock(source, groups) {
   const lines = names.some((name) => name.startsWith("--blyrics-line-") && !hover(name));
   const words = names.some((name) => name.startsWith("--blyrics-word-"));
   const instrumental = names.some((name) => name.startsWith("--blyrics-instrumental-"));
-  const checks = [lines && "the fade", names.some(hover) && "the hover", words && "the words", instrumental && "the instrumental icon"].filter(Boolean);
+  const checks = [lines && "the fade", names.some(hover) && "the hover", (words || settings.length > 0) && "the words", instrumental && "the instrumental icon"].filter(Boolean);
+  const listed = [names.join(", "), settings.length && `the comment setting${settings.length > 1 ? "s" : ""} ${settings.map((setting) => `\`${setting}\``).join(", ")}`].filter(Boolean);
   return {
     output,
     change: {
       line: lineOf(output, output.indexOf(BLOCK_BEGIN)),
       code: "distance-lists",
       message:
-        `${existing ? "Updated" : "Added"} ${names.join(", ")} from the theme's rules${styled.length ? `, and ${and(styled)}` : ""}.` +
+        `${existing ? "Updated" : "Added"} ${and(listed)} from the theme's rules${styled.length ? `, and ${and(styled)}` : ""}.` +
         (checks.length ? ` Watch a synced song to check ${and(checks)} match.` : "") +
         (names.some((name) => name.startsWith("--blyrics-no-lyrics-")) ? " Open a song without lyrics to check the message." : ""),
     },
@@ -736,6 +762,116 @@ function browsedLines(selector, sync) {
   return !!conditions && conditions.notSung && !conditions.sung && !conditions.before && !conditions.notBefore && !conditions.notAfter;
 }
 
+// -- The colour of the hovered line ----------------------------------------
+
+/** What colours a hovered line's words before they are sung. */
+const HOVER_COLOR = ["color", "-webkit-text-fill-color", "--blyrics-lyric-inactive-color"];
+/** Other colours a theme sets under `:hover`, which do not change on hover in the renderer. */
+const OTHER_HOVER_COLOR = /^--blyrics-(?:lyric-active-color|glow-color|translated-color|text-color|lyric-inactive-color)$/;
+const BEATEN = { beaten: true };
+
+/**
+ * What a selector under a hovered line styles: { line, layer }, `line` being the hovered line's
+ * selector without the `:hover`, and `layer` "line" (the line itself), "word" (its words) or "other"
+ * (something else in it, such as background vocals); null when no line is hovered.
+ */
+function hoverTarget(selector) {
+  const parts = compounds(selector);
+  const at = parts.findLastIndex((part) => isHovered(part.compound));
+  if (at < 0) return null;
+  const line = hoveredLine(joinCompounds(parts.slice(0, at + 1)));
+  if (!line) return null;
+  // The old engine's `span` between a line and its words matches nothing now.
+  const rest = parts.slice(at + 1).filter((part, i, all) => i === all.length - 1 || part.compound !== "span");
+  if (rest.length === 0) return { line, layer: "line" };
+  const subject = simples(rest[0].compound);
+  const word = rest.length === 1 && /^[ >]$/.test(rest[0].combinator) && subject.every((s) => s === ".blyrics--word" || s === ".blyrics-line-synced-word");
+  return { line, layer: word ? "word" : "other" };
+}
+
+/**
+ * `--blyrics-line-hover-color`, from the colour a theme gives a hovered line's words before they are
+ * sung: `color` on the line or its words, or `--blyrics-lyric-inactive-color` on either, under
+ * `:hover`. It applies to whichever line is hovered, so it is written when every line but the sung
+ * one ends up the same; the sung line differing is noted.
+ */
+function hoverColor(rules, customs, sync, authored, review, unsupported, cover) {
+  const name = "--blyrics-line-hover-color";
+  const candidates = [];
+  let order = 0;
+  for (const { selector, conditional, declarations } of rules) {
+    for (const [property, raw, important] of declarations) {
+      order++;
+      const colour = HOVER_COLOR.includes(property);
+      if (!colour && !OTHER_HOVER_COLOR.test(property)) continue;
+      for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
+        for (const one of expandIs(original)) {
+          const target = hoverTarget(one);
+          // A rule for lines at rest that outweighs the hover rule keeps those lines as they are.
+          if (!target) {
+            const role = property === "--blyrics-lyric-inactive-color" && !conditional ? lineRole(one, sync) : null;
+            if (role && !role.scoped) candidates.push({ ...role, layer: "line", property, hovered: false, important, specificity: specificity(one), order });
+            continue;
+          }
+          const role = lineRole(target.line, sync);
+          if (!role) continue;
+          if (!colour || target.layer === "other") {
+            if (property.startsWith("--")) {
+              unsupported.push({ line: original, code: "hover", message: "Only the colour of the hovered line's words before they are sung changes on hover in the WebGL renderer, from `--blyrics-line-hover-color`. Other colours set under `:hover` (the sung part, the glow, background vocals, translations) stay as they are." });
+            }
+            continue;
+          }
+          cover(original, property);
+          if (role.scoped || conditional) {
+            review(`This hover colour applies to only some screens, views or lines, so ${name} was not written for it. Set it under a selector or media query of your own if it matters.`, original);
+            continue;
+          }
+          candidates.push({ ...role, layer: target.layer, property, hovered: true, value: cssColor(resolve(raw, customs)), raw: `${property}: ${raw}`, selector: original, important, specificity: specificity(one), order });
+        }
+      }
+    }
+  }
+  if (!candidates.some((c) => c.hovered)) return [];
+  if (authored.has(name)) {
+    review(`The theme already sets ${name}, so it was left as written.`);
+    return [];
+  }
+  const first = candidates.find((c) => c.hovered).selector;
+
+  /** The hover colours that win on a line, the words' over the line's own; BEATEN where a rule at rest wins. */
+  const at = (side, d) => {
+    for (const layer of ["word", "line"]) {
+      const found = [];
+      for (const property of HOVER_COLOR) {
+        const set = candidates.filter((c) => c.layer === layer && c.property === property && c[side] && d >= c[side][0] && d <= c[side][1]);
+        if (!set.some((c) => c.hovered)) continue;
+        const won = winner(set);
+        found.push(won.hovered ? won : BEATEN);
+      }
+      if (found.length > 0) return found;
+    }
+    return [];
+  };
+  const reach = reachOf(candidates);
+  const others = ["before", "after"].flatMap((side) => Array.from({ length: reach }, (_, i) => at(side, i + 1)));
+  const unreadable = others.flat().find((c) => c !== BEATEN && c.value === null);
+  if (unreadable) {
+    review(`Could not read \`${unreadable.raw}\` on the hovered line as a colour, so ${name} was not written; set it by hand.`, unreadable.selector);
+    return [];
+  }
+  const values = new Set(others.map((found) => (found.length === 0 || found.includes(BEATEN) ? null : found.map((c) => c.value).join("\n"))));
+  const [value] = values;
+  if (values.size !== 1 || value === null || value.includes("\n")) {
+    review(`The theme's hover colour differs from line to line, and ${name} applies to whichever line is hovered, so it was not written; set it by hand.`, first);
+    return [];
+  }
+  const sung = at("after", 0).find((c) => c === BEATEN || c.value !== value);
+  if (sung) {
+    review(`The line being sung has a hover colour of its own${sung.raw ? ` (\`${sung.raw}\`)` : ""}, and ${name} applies to whichever line is hovered, so the sung line takes the other lines' hover colour; check it.`, sung.selector ?? first);
+  }
+  return [`${name}: ${value};`];
+}
+
 // -- Words ----------------------------------------------------------------
 
 const WORD_STATE = /^\[data-word-state=["']?(\w+)["']?\]$/;
@@ -952,7 +1088,7 @@ function riseValues(rises, cover) {
     const m = /^calc\(\s*var\(\s*--blyrics-duration\b[^)]*\)\s*\+\s*(\d+(?:\.\d+)?)(ms|s)\s*\)$/.exec(parts[1] ?? "");
     if (!m) continue;
     extras.add(m[2] === "s" ? Number(m[1]) : Number(m[1]) / 1000);
-    const easing = parts.slice(2).find((t) => /^(?:ease|ease-in|ease-out|ease-in-out|linear|cubic-bezier\(.*\)|steps\(.*\))$/.test(t));
+    const easing = parts.slice(2).find((t) => /^(?:ease|ease-in|ease-out|ease-in-out|linear|(?:cubic-bezier|steps|linear)\(.*\))$/.test(t));
     easings.add(easing ?? "ease");
     cover(original, "transition");
   }
@@ -1028,6 +1164,40 @@ function textShadows(rules, authored, review, unsupported, cover) {
     }
   }
   return out;
+}
+
+/**
+ * `--blyrics-romanized-bg-color` from each static `background` or `background-color` on a
+ * romanization, under the same selector.
+ */
+function romanizedBackgrounds(rules, authored, review, unsupported, cover) {
+  const found = [];
+  const name = "--blyrics-romanized-bg-color";
+  for (const { selector, conditional, declarations } of rules) {
+    for (const [property, raw, important] of declarations) {
+      if (property !== "background" && property !== "background-color") continue;
+      for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
+        const subject = simples(lastCompound(original));
+        if (!subject.includes(".blyrics--romanized") || subject.some((s) => /^::?(?:before|after)$|^::/.test(s))) continue;
+        const value = backgroundFill(property, raw);
+        // An image stays reported as not drawn.
+        if (value === undefined) continue;
+        cover(original, property);
+        if (isStateful(original)) {
+          if (value !== "transparent") unsupported.push({ line: original, code: "state-background", message: `A romanization background that changes when a line or word is sung or hovered does not show: the WebGL renderer draws ${name} the same in every state.` });
+        } else if (conditional) {
+          review(`This romanization background applies to only some screens, so ${name} was not written for it. Set it under a media query of your own if it matters.`, original);
+        } else if (authored.has(name)) {
+          review(`The theme already sets ${name}, so it was left as written.`);
+        } else if (value === null) {
+          review(`Could not read \`${property}: ${raw}\` on the romanization as a colour, so ${name} was not written; set it by hand.`, original);
+        } else {
+          found.push({ selector: plainSelector(withoutRestingState(original)), important, value });
+        }
+      }
+    }
+  }
+  return dedupe(found).map((f) => ({ selector: f.selector, declarations: [`${name}: ${f.value}${f.important ? " !important" : ""};`] }));
 }
 
 /**
@@ -1381,6 +1551,105 @@ function noLyricsValues(rules, authored, review, cover) {
   return { container, groups };
 }
 
+// -- Letters ----------------------------------------------------------------
+
+/** The letters the DOM renderer split a word into, or the word split into them. */
+const LETTERS = /^\.blyrics--letter$|^\.blyrics-[\w-]*--lettered$/;
+const HELD = /^\[data-long-word(?:=["']?true["']?)?\]$/;
+const NOT_HELD = /^:not\(\[data-long-word(?:=["']?true["']?)?\]\)$/;
+/** `@container style(--letters: 1) or style(--letters: 2) …`: words of so many letters. */
+const LETTER_COUNT = /^@container\s+style\(\s*--letters\s*:\s*\d+\s*\)(?:\s+or\s+style\(\s*--letters\s*:\s*\d+\s*\))*$/i;
+
+/** The comment settings (`blyrics-key = value;` inside a comment) a stylesheet declares, last one winning. */
+function commentSettings(css) {
+  const out = new Map();
+  for (const [, comment] of css.matchAll(/\/\*([\s\S]*?)\*\//g)) {
+    for (const [, key, value] of comment.matchAll(/(blyrics-[\w-]+)\s*=\s*([^;]+);/g)) out.set(key, value.trim());
+  }
+  return out;
+}
+
+/** Whether a selector picks letters of held words ("held"), of the other words ("plain"), or neither (null). */
+function letterScope(selector) {
+  const parts = compounds(selector).map((part) => simples(part.compound));
+  if (!parts.some((own) => own.some((s) => LETTERS.test(s)))) return null;
+  if (parts.some((own) => own.some((s) => NOT_HELD.test(s)))) return "plain";
+  return parts.some((own) => own.some((s) => HELD.test(s))) ? "held" : "letters";
+}
+
+/**
+ * A theme that waves only the letters of held words wants `blyrics-letter-wave = long;`, which is
+ * noted rather than written: the current renderer reads `long` as `false` and splits no word at all.
+ * When it keeps that wave to words of at most N letters (with a style query on the `--letters` the
+ * DOM renderer set), `blyrics-long-word-max-letters = N`, which the current renderer does not read,
+ * is written. Returns the comment settings to write.
+ */
+function letterSettings(rules, keyframes, settings, authored, review, cover) {
+  const off = [];
+  const held = [];
+  let everyWord = false;
+  for (const { selector, conditions, declarations } of rules) {
+    const own = Object.fromEntries(declarations.map(([property, value]) => [property, value]));
+    const animated = animationsOf(own);
+    const still = (own.animation !== undefined || own["animation-name"] !== undefined) && animated.length === 0;
+    for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
+      for (const one of expandIs(original)) {
+        const scope = letterScope(one);
+        if (scope === "plain" && still) off.push(original);
+        if (scope === "held" && animated.length > 0) held.push({ original, conditions, animated });
+        // Letters waving in every word, on every screen.
+        if (scope === "letters" && animated.length > 0 && conditions.length === 0) everyWord = true;
+      }
+    }
+  }
+  if (everyWord || (off.length === 0 && held.length === 0)) return [];
+
+  // Stopping the DOM renderer's letter animation needs no more than the setting.
+  for (const where of off) for (const property of ["animation", "animation-name"]) cover(where, property);
+  const wave = settings.get("blyrics-letter-wave")?.toLowerCase();
+  if (wave === "false") return [];
+  if (wave !== "long") {
+    const message = `This theme waves the letters of held words only (\`[data-long-word]\`). The WebGL renderer does that with the comment setting \`blyrics-letter-wave = long;\`, which keeps the other words in one piece. It was not written, because the current renderer reads \`long\` as \`false\` and would split no word into letters: put \`/* blyrics-letter-wave = long; */\`${wave === undefined ? "" : ` in place of the theme's \`blyrics-letter-wave = ${settings.get("blyrics-letter-wave")};\``} once the theme is for the WebGL renderer only.`;
+    for (const where of [...off, ...held.map((h) => h.original)]) review(message, where);
+  }
+
+  // What the held letters' keyframes do that the renderer's wave has variables for.
+  const moves = new Set();
+  for (const { animated } of held) {
+    for (const { name } of animated) {
+      for (const { declarations } of keyframes.get(name) ?? []) {
+        for (const [property, value] of declarations) {
+          if (property === "translate" && !/^(?:0|0px|0em|none)$/.test(splitTopLevel(value, " ")[0].trim())) moves.add("spread");
+          if (property === "transform" && /\btranslate(?:X|3d)?\(/.test(value)) moves.add("spread");
+          if (property === "text-shadow" || (property === "filter" && /\bdrop-shadow\(/.test(value))) moves.add("glow");
+        }
+      }
+    }
+  }
+  const variables = { spread: "`--blyrics-letter-wave-spread` (how far the outermost letters move apart at the crest)", glow: "`--blyrics-letter-wave-glow` (how much brighter each letter's glow gets at its crest)" };
+  const asked = [...moves].filter((m) => !authored.has(`--blyrics-letter-wave-${m}`));
+  if (asked.length > 0) {
+    const message = `The keyframes this theme runs on held words' letters also ${asked.map((m) => (m === "spread" ? "move the letters apart" : "light them up")).join(" and ")}, which the WebGL renderer's wave does with ${asked.map((m) => variables[m]).join(" and ")}. Keyframes are not read, so set ${asked.length > 1 ? "them" : "it"} on \`.blyrics-container\` by hand.`;
+    for (const { original } of held) review(message, original);
+  }
+
+  // The largest word the held letters wave in, when every rule for them says the same.
+  const caps = new Set(held.map(({ conditions }) => {
+    const query = conditions.find((c) => /^@container\b/i.test(c));
+    if (!query || !LETTER_COUNT.test(query) || conditions.length > 1) return null;
+    const counts = [...query.matchAll(/--letters\s*:\s*(\d+)/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
+    return counts.every((n, i) => n === i + 1) ? counts.length : null;
+  }));
+  const [cap] = caps;
+  if (caps.size !== 1 || !cap) return [];
+  const key = "blyrics-long-word-max-letters";
+  if (settings.has(key)) {
+    if (settings.get(key) !== String(cap)) review(`The theme waves held words' letters only in words of up to ${cap} letters, and already sets \`${key} = ${settings.get(key)};\`, so it was left as written.`);
+    return [];
+  }
+  return [`${key} = ${cap}`];
+}
+
 // -- Values ----------------------------------------------------------------
 
 /**
@@ -1493,6 +1762,30 @@ function calcValue(expression) {
   const result = sum();
   if (!result || i !== tokens.length || !Number.isFinite(result.n)) return null;
   return `${trimNumber(result.n)}${result.unit}`;
+}
+
+/** A colour as written, or null for what is not one (or depends on the element, such as `currentColor`). */
+function cssColor(value) {
+  if (/^(?:inherit|initial|unset|revert|revert-layer|currentcolor|none|auto)$/i.test(value) || /\bvar\(/.test(value)) return null;
+  return /^(?:#[\da-f]{3,8}|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix|light-dark)\(.*\)|[a-z]+)$/i.test(value) ? value : null;
+}
+
+/** Background keywords that are no colour. */
+const BACKGROUND_KEYWORD = /^(?:none|repeat|no-repeat|repeat-x|repeat-y|space|round|scroll|fixed|local|center|top|bottom|left|right|border-box|padding-box|content-box|text|auto|cover|contain)$/i;
+
+/**
+ * The colour a `background` or `background-color` fills with: "transparent" when it draws nothing,
+ * undefined when it draws an image, null when it cannot be read.
+ */
+function backgroundFill(property, value) {
+  if (/\b(?:url|image|image-set|cross-fade|element|paint|[\w-]*gradient)\(/i.test(value)) return undefined;
+  if (property === "background-color") return /\bvar\(/.test(value) && !/^var\([^()]*\)$/.test(value) ? null : /^var\(/.test(value) ? value : cssColor(value);
+  // The shorthand sets the colour too: to transparent when it names none.
+  if (/\bvar\(/.test(value) || value.includes(",") || /^(?:inherit|initial|unset|revert|revert-layer)$/i.test(value)) return null;
+  const tokens = splitTopLevel(value, " ").flatMap((t) => (t.includes("(") ? [t] : t.split("/")));
+  const colours = tokens.map((t) => t.trim()).filter((t) => t && !BACKGROUND_KEYWORD.test(t) && !/^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[a-z]+|%)?$/i.test(t));
+  if (colours.length === 0) return "transparent";
+  return colours.length === 1 ? cssColor(colours[0]) : null;
 }
 
 function parseOpacity(value) {

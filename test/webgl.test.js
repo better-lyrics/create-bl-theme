@@ -458,3 +458,107 @@ test("a message size the line takes on some screens is the author's", () => {
   assert.doesNotMatch(output, /\.blyrics--line \{\n {2}font-size/);
   assert.ok(flags.some((flag) => flag.message.includes("sets font-size")));
 });
+
+// Most themes clear the box the DOM renderer drew behind romanizations.
+test("a romanization's background becomes its background colour", () => {
+  for (const [declaration, value] of [["background: none", "transparent"], ["background: 0", "transparent"], ["background-color: transparent !important", "transparent !important"], ["background: rgb(0 0 0 / .3) no-repeat", "rgb(0 0 0 / .3)"]]) {
+    const { rules, unsupported } = migrate(`.blyrics--line>.blyrics--romanized, .blyrics--line>.blyrics--translated { ${declaration} }`);
+    assert.deepEqual(rules[".blyrics--line > .blyrics--romanized"], { "--blyrics-romanized-bg-color": value }, declaration);
+    // Clearing the translation's background draws nothing either way; colouring it is reported.
+    assert.deepEqual(unsupported.map((u) => u.where), value.startsWith("transparent") ? [] : [[".blyrics--line>.blyrics--translated"]], declaration);
+  }
+});
+
+test("a romanization background the renderer cannot draw, or that changes with state, is not written", () => {
+  const { output, unsupported } = migrate(`.blyrics--romanized { background: linear-gradient(red, blue) } .blyrics--active .blyrics--romanized { background: red }`);
+  assert.doesNotMatch(output, /--blyrics-romanized-bg-color/);
+  assert.equal(unsupported.length, 2);
+  const { flags } = migrate(`.blyrics--romanized { background: var(--box) } @media (max-width: 600px) { .blyrics--romanized { background: none } }`);
+  assert.equal(flags.filter((flag) => flag.code === "review").length, 2);
+});
+
+test("a hovered line's colour becomes the hover colour", () => {
+  for (const css of [
+    `${LINE}:hover { color: #fff }`,
+    `${LINE}:hover .blyrics--word { color: #fff }`,
+    `.blyrics--line:hover > span > .blyrics--word { color: #fff }`,
+    `${LINE}:not(.blyrics--active):hover { --blyrics-lyric-inactive-color: #fff }`,
+    `:root { --hover: #fff } ${LINE}:hover { --blyrics-lyric-inactive-color: var(--hover) }`,
+  ]) {
+    const { written, unsupported } = migrate(css);
+    assert.deepEqual(written, { "hover-color": "#fff" }, css);
+    assert.deepEqual(unsupported, [], css);
+  }
+});
+
+test("Spicy for YTM's hover colour is written, and what it does beside it is noted", () => {
+  const css = `${LINE}:not(.blyrics--active):hover { --blyrics-lyric-inactive-color: color(display-p3 1 1 1 / 0.75) }
+    ${LINE}:not(.blyrics--active):hover .blyrics-background-line { --blyrics-lyric-inactive-color: color(display-p3 1 1 1 / 0.5) }
+    ${SUNG}:hover { --blyrics-lyric-inactive-color: color(display-p3 1 1 1 / 0.95); --blyrics-lyric-active-color: white }`;
+  const { written, flags, unsupported } = migrate(css);
+  assert.deepEqual(written, { "hover-color": "color(display-p3 1 1 1 / 0.75)" });
+  assert.ok(flags.some((flag) => flag.message.startsWith("The line being sung has a hover colour of its own")));
+  assert.deepEqual(unsupported.map((u) => u.where.length), [2]);
+});
+
+test("a hover colour that differs by line, cannot be read, is beaten, or that the author set is not written", () => {
+  for (const css of [
+    `${SUNG} ~ .blyrics--line:hover { color: red }`,
+    `${SUNG} ~ .blyrics--line:hover { color: red } ${LINE}:has(~ .blyrics--active):hover { color: blue }`,
+    `${LINE}:hover { color: var(--set-elsewhere) }`,
+    `${LINE}:hover { color: currentColor }`,
+    `${LINE}:not(.blyrics--active) { --blyrics-lyric-inactive-color: gray !important } ${LINE}:hover { --blyrics-lyric-inactive-color: white }`,
+    `.blyrics-container { --blyrics-line-hover-color: white } ${LINE}:hover { color: red }`,
+    `#layout[player-fullscreened] ${LINE}:hover { color: red }`,
+  ]) {
+    const { written, flags } = migrate(css);
+    assert.equal(written["hover-color"], undefined, css);
+    assert.ok(flags.some((flag) => flag.code === "review"), css);
+  }
+});
+
+test("letters waved only in held words are left as a note for the long letter wave", () => {
+  for (const css of [
+    `.blyrics--word:not([data-long-word]) .blyrics-word-highlight--lettered .blyrics--letter { animation: none }`,
+    `.blyrics--word[data-long-word] > .blyrics--letter { animation: lift 1s ease }`,
+  ]) {
+    const { output, flags } = migrate(css);
+    assert.doesNotMatch(output, /WebGL renderer \(begin\)/, css);
+    const note = flags.find((flag) => flag.message.includes("blyrics-letter-wave = long;"));
+    assert.ok(note && /reads `long` as `false`/.test(note.message), css);
+  }
+  // Turning the old animation off needs nothing more than the setting.
+  const { flags } = migrate(`/* blyrics-letter-wave = long; */ .blyrics--word:not([data-long-word]) .blyrics--letter { animation: none }`);
+  assert.deepEqual(flags, []);
+  // A theme whose letters wave in every word wants no change.
+  assert.ok(!migrate(`.blyrics--letter { animation: lift 1s } .blyrics--word[data-long-word] .blyrics--letter { animation: lift 2s }`).flags.some((flag) => flag.message.includes("letter-wave = long")));
+});
+
+// Spicy for YTM waves the letters of held words of up to 8 letters with its own keyframes.
+const HELD_LETTERS = `/* blyrics-letter-wave = true; */
+  @container style(--letters: 1) or style(--letters: 2) or style(--letters: 3) {
+    .blyrics--line .blyrics--word[data-long-word]:not([data-word-state="upcoming"]) > .blyrics--letter { animation: letter-wave 1s linear }
+  }
+  @keyframes letter-wave { 40% { translate: calc(var(--x) * .9) -0.05em; text-shadow: 0 0 8px white } }`;
+
+test("a style query on the letter count caps the letters of a held word", () => {
+  const { output, flags } = migrate(HELD_LETTERS);
+  assert.match(output, /\/\* blyrics-long-word-max-letters = 3; \*\//);
+  assert.ok(flags.some((flag) => flag.message.includes("in place of the theme's `blyrics-letter-wave = true;`")));
+  assert.ok(flags.some((flag) => flag.message.includes("`--blyrics-letter-wave-spread`") && flag.message.includes("`--blyrics-letter-wave-glow`")));
+  const again = migrateForWebgl(output, output);
+  assert.equal(again.output, output);
+  assert.deepEqual(again.changes, []);
+});
+
+test("a letter cap the author set, or a query that is not one, is not written", () => {
+  assert.doesNotMatch(migrate(`/* blyrics-long-word-max-letters = 5; */ ${HELD_LETTERS}`).output, /max-letters = 3/);
+  assert.doesNotMatch(migrate(HELD_LETTERS.replace("style(--letters: 2) or ", "")).output, /max-letters/);
+  assert.doesNotMatch(migrate(HELD_LETTERS.replace("@container", "@container (min-width: 1px) and")).output, /max-letters/);
+});
+
+test("a linear() easing on the words' rise carries over", () => {
+  const css = `.blyrics--word { transform: translateY(3px); transition: transform calc(var(--blyrics-duration) + 200ms) linear(0, 0.6 20%, 1.1 60%, 1) }
+    .blyrics--word.blyrics--animating { transform: none }`;
+  assert.deepEqual(migrate(css).rules[".blyrics-container"], { "--blyrics-word-rise-easing": "linear(0, 0.6 20%, 1.1 60%, 1)" });
+});
