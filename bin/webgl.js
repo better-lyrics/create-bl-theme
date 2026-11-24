@@ -14,8 +14,9 @@
 // sung one are lists: `--blyrics-line-opacity[-before|-after]` and the `-blur`,
 // `-saturate` and `-brightness` lists beside it, of values for the sung line,
 // then 1, 2, 3... lines away. The hovered line, the other lines while the
-// reader browses, a word's pose until it is sung, its opacity once sung, and a
-// static text shadow each have a variable too. This pass reads the theme's
+// reader browses, a word's pose until it is sung, its opacity once sung, a
+// static text shadow, the instrumental icon and its pulse, and the no-lyrics
+// message and its icon each have a variable too. This pass reads the theme's
 // rules and writes those variables, which the current DOM renderer ignores, so
 // the theme keeps working on both.
 //
@@ -34,7 +35,7 @@
 // The full mapping is in skills/MIGRATION.md.
 // ---------------------------------------------------------------------------
 
-import { argumentsOf, blankComments, compareSpecificity, compounds, expandIs, parseRules, simples, specificity, splitTopLevel } from "./css.js";
+import { argumentsOf, blankComments, compareSpecificity, compounds, expandIs, parseKeyframes, parseRules, simples, specificity, splitTopLevel } from "./css.js";
 
 export const DISCORD_URL = "https://discord.gg/UsHE3d5fWF";
 
@@ -57,7 +58,7 @@ const DEAD_VARIABLES = [
   {
     pattern: /--blyrics-instrumental-(?:wave-path-(?:high|low)|wave-transform-(?:from|to)|fill-transform-(?:from|to)|fill-easing|fill-fade-easing|wave-easing|wave-oscillation-easing)\b/g,
     message:
-      "The WebGL renderer draws the instrumental note itself and does not read this variable. Its colours follow the lyric colours; `--blyrics-instrumental-fill-fade-duration`, `--blyrics-instrumental-wave-oscillation-duration` and `--blyrics-animate-instrumental` still apply.",
+      "The WebGL renderer draws the instrumental note itself and does not read this variable. `--blyrics-instrumental-icon` picks the note, the dots or a character, and its colours follow the lyric colours; `--blyrics-instrumental-fill-fade-duration`, `--blyrics-instrumental-wave-oscillation-duration` and `--blyrics-animate-instrumental` still apply.",
   },
   {
     pattern: /--blyrics-word-wobble-end-easing\b/g,
@@ -129,6 +130,7 @@ export function migrateForWebgl(source, css) {
   // 1. What the renderer reads from the container, worked out for each sync type: the distance
   //    lists, the hovered line, the lines while browsing, the words' rise.
   const words = wordValues(rules, customs, authored, review, cover);
+  const instrumental = instrumentalValues(rules, parseKeyframes(withoutBlock(css)), authored, review, cover);
   const perSync = SYNCS.map((sync) => {
     const candidates = lineCandidates(rules, customs[sync], sync, review);
     return [
@@ -136,12 +138,14 @@ export function migrateForWebgl(source, css) {
       ...hoverValues(candidates, authored, review),
       ...browsingValue(rules, customs[sync], sync, candidates, authored, review, cover),
       ...words.themeWide,
+      ...instrumental,
     ];
   });
 
   // 2. What it reads from each element, under the theme's own selectors.
   const pseudo = pseudoVariables(rules, review);
-  const groups = [...themeWide(perSync), ...words.groups, ...textShadows(rules, authored, review, unsupported, cover), ...pseudo.groups];
+  const noLyrics = noLyricsValues(rules, authored, review, cover);
+  const groups = [...withContainer(themeWide(perSync), noLyrics.container), ...words.groups, ...textShadows(rules, authored, review, unsupported, cover), ...pseudo.groups, ...noLyrics.groups];
   const { output, change } = withBlock(source, groups);
   if (change) changes.push(change);
 
@@ -276,28 +280,46 @@ function withBlock(source, groups) {
   const block = [
     BLOCK_BEGIN,
     "/* This theme's rules as the WebGL renderer reads them: lines fade, blur and dim by their",
-    "   distance from the sung line, the line under the mouse takes the hover values, and words and",
-    "   their shadows take the variables below. The current renderer ignores these and keeps using",
-    "   the rules. */",
+    "   distance from the sung line, the line under the mouse takes the hover values, and words,",
+    "   their shadows, the instrumental icon and the no-lyrics message take the variables below.",
+    "   The current renderer ignores these and keeps using the rules. */",
     ...groups.flatMap(({ selector, declarations }) => [`${selector} {`, ...declarations.map((d) => `  ${d}`), "}"]),
     BLOCK_END,
   ].join(newline);
   if (existing?.[0] === block) return { output: source, change: null };
   // In place, so what the author added after the block stays after it.
   const output = existing ? source.replace(BLOCK, () => block) : `${source.trimEnd()}${newline}${newline}${block}${newline}`;
-  const names = [...new Set(groups.flatMap(({ declarations }) => declarations.map((d) => d.split(":")[0])))];
+  const names = [...new Set(groups.flatMap(({ declarations }) => declarations.map((d) => d.split(":")[0]).filter((name) => name.startsWith("--"))))];
+  const and = (list) => (list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list.join(""));
+  // Real properties, on the renderer's own elements: the no-lyrics icon and message.
+  const styled = groups
+    .map(({ selector, declarations }) => [selector, declarations.map((d) => d.split(":")[0]).filter((name) => !name.startsWith("--"))])
+    .filter(([, properties]) => properties.length > 0)
+    .map(([selector, properties]) => `${and(properties)} on \`${selector}\``);
   const hover = (name) => name.includes("-hover-") || name.endsWith("-browsing");
   const lines = names.some((name) => name.startsWith("--blyrics-line-") && !hover(name));
   const words = names.some((name) => name.startsWith("--blyrics-word-"));
-  const checks = [lines && "the fade", names.some(hover) && "the hover", words && "the words"].filter(Boolean);
+  const instrumental = names.some((name) => name.startsWith("--blyrics-instrumental-"));
+  const checks = [lines && "the fade", names.some(hover) && "the hover", words && "the words", instrumental && "the instrumental icon"].filter(Boolean);
   return {
     output,
     change: {
       line: lineOf(output, output.indexOf(BLOCK_BEGIN)),
       code: "distance-lists",
-      message: `${existing ? "Updated" : "Added"} ${names.join(", ")} from the theme's rules.${checks.length ? ` Watch a synced song to check ${checks.join(", ").replace(/, ([^,]*)$/, " and $1")} match.` : ""}`,
+      message:
+        `${existing ? "Updated" : "Added"} ${names.join(", ")} from the theme's rules${styled.length ? `, and ${and(styled)}` : ""}.` +
+        (checks.length ? ` Watch a synced song to check ${and(checks)} match.` : "") +
+        (names.some((name) => name.startsWith("--blyrics-no-lyrics-")) ? " Open a song without lyrics to check the message." : ""),
     },
   };
+}
+
+/** `groups` with `declarations` added to its `.blyrics-container` group, which comes first. */
+function withContainer(groups, declarations) {
+  if (declarations.length === 0) return groups;
+  const at = groups.findIndex((g) => g.selector === ".blyrics-container");
+  if (at < 0) return [{ selector: ".blyrics-container", declarations }, ...groups];
+  return groups.map((g, i) => (i === at ? { ...g, declarations: [...g.declarations, ...declarations] } : g));
 }
 
 /** One group of theme-wide values when both sync types give the same, else one under each. */
@@ -1033,6 +1055,330 @@ function pseudoVariables(rules, review) {
     }
   }
   return { groups, settles: groups.length > 0 && !skipped ? ["var-on-pseudo"] : [] };
+}
+
+// -- The instrumental icon and the no-lyrics message ----------------------
+
+const CSS_STRING = /^(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')$/;
+const PSEUDO = /^::?(before|after)$/;
+const EMPTY_LINE = ":has(.blyrics-bidi-run:empty)";
+const NO_LYRICS = /^\[data-no-lyrics=["']?true["']?\]$/;
+const NO_LYRICS_LINE = '.blyrics-container[data-no-lyrics="true"] .blyrics--line';
+/** Font sizes and weights that depend on the element's parent, which is not the same once moved. */
+const RELATIVE_FONT = /\d(?:em|ex|ch|lh|%)(?![a-z])|\bvar\(|^(?:larger|smaller|bolder|lighter|inherit)$/;
+
+/** The text of a CSS string, or null when `value` is not one. */
+function cssString(value) {
+  return CSS_STRING.test(value) ? value.slice(1, -1) : null;
+}
+
+/**
+ * Whether a selector is an instrumental line's `::before` or `::after`, or the empty line's
+ * (`.blyrics--line:has(.blyrics-bidi-run:empty) .blyrics-line-main::before`), which themes draw
+ * their own note on. Returns { state, scoped }: the state is "rest", "sung" (the line being sung),
+ * or "other" (paused, or the reader browsing); scoped when it is for only some lines or views.
+ */
+function instrumentalPseudo(selector) {
+  const parts = compounds(selector);
+  const subject = simples(parts[parts.length - 1]?.compound ?? "");
+  if (!subject.some((s) => PSEUDO.test(s))) return null;
+  let at = parts.length - 1;
+  let scoped = false;
+  if (!subject.includes(".blyrics--instrumental")) {
+    if (!subject.includes(".blyrics-line-main") || at === 0 || !/^[ >]$/.test(parts[at].combinator)) return null;
+    at--;
+    if (!simples(parts[at].compound).includes(EMPTY_LINE)) return null;
+    scoped = subject.some((s) => s !== ".blyrics-line-main" && !PSEUDO.test(s));
+  }
+  const own = simples(parts[at].compound);
+  const ancestors = parts.slice(0, at);
+  if (own.includes(".blyrics--paused") || ancestors.some((part) => simples(part.compound).some((s) => s === ":hover" || s === ".blyrics-user-scrolling"))) {
+    return { state: "other", scoped };
+  }
+  const plain = own.every((s) => PSEUDO.test(s) || STATE.test(s) || s === EMPTY_LINE || /^(?:div|\.blyrics--line|\.blyrics--instrumental)$/.test(s));
+  const resting = syncOf(selector) === "" && ancestors.every((part) => {
+    const container = simples(part.compound);
+    return container.includes(".blyrics-container") ? isContainerAtRest(part.compound) : container.every((s) => PAGE.test(s));
+  });
+  return { state: own.some((s) => STATE.test(s)) ? "sung" : "rest", scoped: scoped || !plain || !resting };
+}
+
+/** Whether a rule masks its box into a row of round dots: Apple Music's instrumental. */
+function isDotsMask(own) {
+  const mask = ["mask", "-webkit-mask", "mask-image", "-webkit-mask-image"].map((p) => own[p]).filter(Boolean);
+  const repeat = ["mask", "-webkit-mask", "mask-repeat", "-webkit-mask-repeat"].map((p) => own[p]).filter(Boolean);
+  return mask.some((v) => /\bradial-gradient\(/.test(v)) && repeat.some((v) => /\brepeat-x\b/.test(v));
+}
+
+/**
+ * `--blyrics-instrumental-icon` from the content a theme draws on the instrumental line's
+ * `::before` / `::after`, and the pulse from the animation it runs there while the line is sung.
+ * Read from the container, so they are written there.
+ */
+function instrumentalValues(rules, keyframes, authored, review, cover) {
+  const icons = [];
+  const animated = [];
+  const hides = [];
+  for (const { selector, conditional, declarations } of rules) {
+    const own = Object.fromEntries(declarations.map(([property, value]) => [property, value]));
+    for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
+      if (/^none\b/.test(own.display ?? "") && simples(lastCompound(original)).includes(".blyrics--instrumental-icon")) hides.push(original);
+      for (const one of expandIs(original)) {
+        const where = instrumentalPseudo(one);
+        if (!where || where.state === "other") continue;
+        if (where.state === "rest" && own.content !== undefined) {
+          if (conditional || where.scoped) {
+            review("This instrumental note applies to only some screens, views or lines, so --blyrics-instrumental-icon was not written for it. Set it under a selector or media query of your own if it matters.", original);
+          } else if (!/^none\b/.test(own.display ?? "")) {
+            icons.push({ raw: own.content, dots: isDotsMask(own), original });
+          }
+        }
+        if (where.state === "sung" && !conditional && !where.scoped && (own.animation || own["animation-name"])) animated.push({ own, original });
+      }
+    }
+  }
+
+  const out = [];
+  const name = "--blyrics-instrumental-icon";
+  // Nothing drawn: `content: none` or `normal`.
+  const drawn = icons.filter((icon) => !/^(?:none|normal)$/.test(icon.raw));
+  if (drawn.length === 0) return out;
+  const values = drawn.map((icon) => {
+    const text = cssString(icon.raw);
+    if (text === null) return null;
+    return text === "" ? (icon.dots ? "dots" : "") : icon.raw;
+  });
+  const unreadable = drawn.find((_, i) => values[i] === null);
+  const empty = drawn.find((_, i) => values[i] === "");
+  if (unreadable) {
+    review(`Could not read \`content: ${unreadable.raw}\` on the instrumental line, so ${name} was not written; set it to a CSS string by hand.`, unreadable.original);
+    return out;
+  }
+  if (empty) {
+    review(`This draws something on the instrumental line other than text, which the WebGL renderer does not draw. Its ${name} takes \`note\` (the default), \`dots\` (Apple Music's three dots, lit one after another) or a CSS string such as \`"♫"\`: if this is the three dots, set \`${name}: dots\` on \`.blyrics-container\`.`, empty.original);
+    return out;
+  }
+  if (new Set(values).size > 1) {
+    review(`The theme draws different notes on instrumental lines (${[...new Set(values)].join(", ")}), and ${name} is one for the whole song, so it was not written; set it by hand.`, drawn[0].original);
+    return out;
+  }
+  if (authored.has(name)) {
+    review(`The theme already sets ${name}, so it was left as written.`);
+  } else {
+    out.push(`${name}: ${values[0]};`);
+    for (const icon of drawn) cover(icon.original, "content");
+    // The DOM renderer's note, which the WebGL renderer replaces with this one.
+    for (const hide of hides) cover(hide, "display");
+  }
+  return [...out, ...pulseValues(animated, keyframes, values[0] === "dots", authored, review)];
+}
+
+/**
+ * `--blyrics-instrumental-pulse-scale` and `-duration` from the keyframes the sung instrumental
+ * line's note runs: the scale furthest from 1, once a period.
+ */
+function pulseValues(animated, keyframes, dots, authored, review) {
+  const pulses = [];
+  for (const { own, original } of animated) {
+    for (const animation of animationsOf(own)) {
+      const frames = keyframes.get(animation.name);
+      if (!frames) continue;
+      const { scale, ends, others } = keyframeScale(frames, dots);
+      // The dots light up by themselves: a keyframe that slides their fill across is theirs.
+      if (others.length > 0) {
+        review(
+          scale === null
+            ? `The \`${animation.name}\` animation on the instrumental note (${others.join(", ")}) does not run in the WebGL renderer. Only a pulsing scale carries over, as --blyrics-instrumental-pulse-scale.`
+            : `Only the scale of the \`${animation.name}\` animation on the instrumental note carries over, as --blyrics-instrumental-pulse-scale; the rest of it (${others.join(", ")}) does not run in the WebGL renderer.`,
+          original
+        );
+      }
+      if (scale === null) continue;
+      if (!ends || !animation.infinite || animation.seconds === null) {
+        review(`The \`${animation.name}\` animation on the instrumental note does not swell and come back once a period, forever, which is what the WebGL renderer's pulse does, so --blyrics-instrumental-pulse-scale was not written; set it by hand.`, original);
+        continue;
+      }
+      pulses.push({ scale, seconds: animation.seconds, original });
+    }
+  }
+  if (pulses.length === 0) return [];
+  const found = new Set(pulses.map((p) => `${p.scale} ${p.seconds}`));
+  if (found.size > 1) {
+    review("The instrumental note pulses differently in different rules, and the WebGL renderer's pulse is one for the whole song, so --blyrics-instrumental-pulse-scale was not written; set it by hand.", pulses[0].original);
+    return [];
+  }
+  const out = [];
+  const { scale, seconds } = pulses[0];
+  for (const [name, value, rest] of [["--blyrics-instrumental-pulse-scale", scale, "1"], ["--blyrics-instrumental-pulse-duration", `${seconds}s`, "1.5s"]]) {
+    if (authored.has(name)) review(`The theme already sets ${name}, so it was left as written.`);
+    else if (value !== rest) out.push(`${name}: ${value};`);
+  }
+  return out;
+}
+
+/** The animations a rule runs: [{ name, seconds, infinite }], from the shorthand or the longhands. */
+function animationsOf(own) {
+  const list = (value) => (value ? splitTopLevel(value, ",").map((v) => v.trim()) : []);
+  const seconds = (token) => {
+    const m = /^(\d*\.?\d+)(ms|s)$/.exec(token ?? "");
+    return m ? trimNumber(Number(m[1]) / (m[2] === "ms" ? 1000 : 1)) : null;
+  };
+  const out = list(own.animation)
+    .filter((one) => one !== "none")
+    .map((one) => {
+      const tokens = splitTopLevel(one, " ").map((t) => t.trim()).filter(Boolean);
+      const name = tokens.find((t) => /^[a-z_-][\w-]*$/i.test(t) && !ANIMATION_KEYWORD.test(t)) ?? "";
+      return { name, seconds: seconds(tokens.find((t) => seconds(t) !== null)), infinite: tokens.includes("infinite") };
+    });
+  // Longhands set after the shorthand win, entry by entry.
+  list(own["animation-name"]).forEach((name, i) => (out[i] = { seconds: null, infinite: false, ...out[i], name }));
+  list(own["animation-duration"]).forEach((d, i) => out[i] && (out[i].seconds = seconds(d)));
+  list(own["animation-iteration-count"]).forEach((n, i) => out[i] && (out[i].infinite = n === "infinite"));
+  return out.filter((a) => a.name && a.name !== "none");
+}
+
+const ANIMATION_KEYWORD = /^(?:infinite|normal|reverse|alternate|alternate-reverse|none|forwards|backwards|both|running|paused|linear|ease|ease-in|ease-out|ease-in-out|step-start|step-end|initial|inherit|unset)$/;
+
+/**
+ * What a keyframe rule scales to: the scale furthest from 1 (null for none), whether it starts and
+ * ends unscaled, and the other properties it animates.
+ */
+function keyframeScale(frames, dots) {
+  let scale = null;
+  let ends = true;
+  const others = new Set();
+  const consider = (value, stops) => {
+    if (value === null) return false;
+    const n = Number(value);
+    if (scale === null || Math.abs(n - 1) > Math.abs(Number(scale) - 1)) scale = value;
+    if (n !== 1 && stops.some((stop) => /^(?:from|to|0%|100%)$/.test(stop))) ends = false;
+    return true;
+  };
+  for (const { selector, declarations } of frames) {
+    const stops = splitTopLevel(selector, ",").map((s) => s.trim());
+    for (const [property, value] of declarations) {
+      if (property === "transform" && consider(scaleOf(value), stops)) continue;
+      if (property === "scale" && consider(scaleNumber(value), stops)) continue;
+      if (/^(?:transform-origin|animation-timing-function)$/.test(property)) continue;
+      if (dots && /^background-position/.test(property)) continue;
+      others.add(property);
+    }
+  }
+  // Held at 1 throughout, it does not pulse.
+  return { scale: scale === "1" ? null : scale, ends, others: [...others] };
+}
+
+/** A transform made only of a uniform `scale()`, `none` meaning 1, as a number; else null. */
+function scaleOf(value) {
+  if (value === "none") return "1";
+  const m = /^scale\(\s*([^,()]+?)\s*(?:,\s*([^,()]+?)\s*)?\)$/.exec(value);
+  if (!m || (m[2] !== undefined && m[2] !== m[1])) return null;
+  return scaleNumber(m[1]);
+}
+
+/** A uniform scale, a number or a percentage, as a number; else null. */
+function scaleNumber(value) {
+  if (value === "none") return "1";
+  const [x, y = x] = value.split(/\s+/);
+  const m = /^(\d*\.?\d+)(%?)$/.exec(x);
+  return m && y === x ? trimNumber(Number(m[1]) / (m[2] ? 100 : 1)) : null;
+}
+
+/**
+ * Whether a selector is the line the renderer shows when there are no lyrics, or its `::before` /
+ * `::after`: "line", "before", "after", or null.
+ */
+function noLyricsPart(selector) {
+  const parts = compounds(selector);
+  if (parts.length < 2 || !/^[ >]$/.test(parts[parts.length - 1].combinator)) return null;
+  const subject = simples(parts[parts.length - 1].compound);
+  const container = simples(parts[parts.length - 2].compound);
+  if (!container.includes(".blyrics-container") || !container.some((s) => NO_LYRICS.test(s))) return null;
+  if (!container.every((s) => s === ".blyrics-container" || s === "div" || NO_LYRICS.test(s))) return null;
+  if (!parts.slice(0, -2).every((part) => simples(part.compound).every((s) => PAGE.test(s)))) return null;
+  if (!subject.includes(".blyrics--line") || !subject.every((s) => s === ".blyrics--line" || PSEUDO.test(s))) return null;
+  return subject.map((s) => PSEUDO.exec(s)?.[1]).find(Boolean) ?? "line";
+}
+
+/**
+ * `--blyrics-no-lyrics-text` and `--blyrics-no-lyrics-icon` from the content a theme draws on the
+ * no-lyrics line's `::after` and `::before`, with the icon's size and colour on its element and the
+ * message's size and weight on the line, whose style the WebGL renderer draws it with.
+ */
+function noLyricsValues(rules, authored, review, cover) {
+  const found = { line: {}, before: {}, after: {} };
+  let order = 0;
+  for (const { selector, conditional, declarations } of rules) {
+    for (const [property, value, important] of declarations) {
+      order++;
+      for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
+        for (const one of expandIs(original)) {
+          const part = noLyricsPart(one);
+          if (!part) continue;
+          if (conditional) {
+            if (property === "content") review("This no-lyrics message applies to only some screens, so --blyrics-no-lyrics-text and -icon were not written for it. Set them under a media query of your own if they matter.", original);
+            // A size the line takes on some screens is still one the block would override there.
+            if (part !== "line") continue;
+          }
+          (found[part][property] ??= []).push({ value, important, specificity: specificity(one), order, original });
+        }
+      }
+    }
+  }
+
+  const container = [];
+  const groups = [];
+  /** The text a pseudo-element's content gives: a string, "" for none, null when unreadable. */
+  const read = (part, name) => {
+    const all = found[part].content;
+    if (!all) return "";
+    const won = winner(all);
+    if (/^(?:none|normal)$/.test(won.value)) {
+      for (const c of all) cover(c.original, "content");
+      return "";
+    }
+    if (cssString(won.value) === null) {
+      review(`Could not read \`content: ${won.value}\` on the no-lyrics line, so ${name} was not written; set it to a CSS string by hand.`, won.original);
+      return null;
+    }
+    // An empty string draws nothing, here and in the WebGL renderer.
+    for (const c of all) cover(c.original, "content");
+    if (cssString(won.value) === "") return "";
+    if (authored.has(name)) {
+      review(`The theme already sets ${name}, so it was left as written.`);
+      return null;
+    }
+    container.push(`${name}: ${won.value};`);
+    return won.value;
+  };
+  const text = read("after", "--blyrics-no-lyrics-text");
+  const icon = read("before", "--blyrics-no-lyrics-icon");
+  const declaration = (property, { value, important }) => `${property}: ${value}${important ? " !important" : ""};`;
+
+  if (icon) {
+    const style = ["font-size", "color"].filter((p) => found.before[p]).map((p) => declaration(p, winner(found.before[p])));
+    if (style.length) groups.push({ selector: '.blyrics-container[data-no-lyrics="true"] .blyrics-no-lyrics-icon', declarations: style });
+  }
+  if (text) {
+    const style = [];
+    for (const property of ["font-size", "font-weight"]) {
+      if (!found.after[property]) continue;
+      const won = winner(found.after[property]);
+      const where = `the no-lyrics line (\`${NO_LYRICS_LINE}\`)`;
+      if (found.line[property]) {
+        review(`The theme sets ${property} on ${where} already, so the message's own ${property} (\`${won.value}\`, from its \`::after\`) was not written there. The WebGL renderer draws the message with the line's style: check its ${property}.`, won.original);
+      } else if (RELATIVE_FONT.test(won.value)) {
+        review(`The message's ${property} (\`${won.value}\`, from its \`::after\`) is relative to the line, so it was not written onto ${where}, whose style the WebGL renderer draws the message with; set it there by hand.`, won.original);
+      } else if (icon && !found.before[property]) {
+        // On the current renderer the icon's `::before` would inherit it from the line.
+        review(`The message's ${property} (\`${won.value}\`, from its \`::after\`) was not written onto ${where}, whose style the WebGL renderer draws the message with, because the icon's \`::before\` would take it too on the current renderer. Set ${property} on both by hand if it matters.`, won.original);
+      } else {
+        style.push(declaration(property, won));
+      }
+    }
+    if (style.length) groups.push({ selector: NO_LYRICS_LINE, declarations: style });
+  }
+  return { container, groups };
 }
 
 // -- Values ----------------------------------------------------------------

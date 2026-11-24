@@ -329,3 +329,132 @@ test("a container that always holds while a song plays is no state, and is left 
   assert.deepEqual(rules[".blyrics-container .blyrics--word"], { "--blyrics-text-shadow": "0 .3rem .5rem rgba(0, 0, 0, .15)" });
   assert.deepEqual(unsupported, []);
 });
+
+// Burn, Minimal and Opacity Based Karaoke draw their own note on the instrumental line and on the
+// empty line, and pulse it while the line is sung.
+const NOTE_PULSE = `.blyrics--instrumental-icon { display: none }
+  .blyrics--instrumental.blyrics--line::after { content: "♫"; animation: none; transform: scale(100%) }
+  .blyrics--active.blyrics--animating.blyrics--instrumental.blyrics--line::after { animation: note-pulse 1.5s ease-in-out infinite }
+  .blyrics--paused.blyrics--active.blyrics--animating.blyrics--instrumental.blyrics--line::after { animation-play-state: paused }
+  .blyrics--line:has(.blyrics-bidi-run:empty) .blyrics-line-main::before { content: "♫" }
+  .blyrics--active.blyrics--animating.blyrics--line:has(.blyrics-bidi-run:empty) .blyrics-line-main::before { animation: note-pulse 1.5s ease-in-out infinite }`;
+
+test("a note drawn on the instrumental line becomes the instrumental icon, and its pulse the pulse", () => {
+  const css = `${NOTE_PULSE}
+    @keyframes note-pulse { 0% { opacity: .6; transform: scale(100%); transform-origin: bottom center } 50% { opacity: 1; transform: scale(105%) } 100% { opacity: .6; transform: scale(100%) } }`;
+  const { rules, flags, unsupported } = migrate(css);
+  assert.deepEqual(rules[".blyrics-container"], { "--blyrics-instrumental-icon": '"♫"', "--blyrics-instrumental-pulse-scale": "1.05" });
+  assert.deepEqual(unsupported, []);
+  // The DOM renderer's note it hid is replaced, so hiding it needs no note.
+  assert.ok(!flags.some((flag) => flag.code === "display-none"));
+  assert.deepEqual(flags.map((flag) => flag.message).filter((m) => /only the scale/i.test(m)).length, 1);
+});
+
+test("a pulse that only scales carries over whole, with its duration", () => {
+  const css = `${NOTE_PULSE.replaceAll("1.5s", "1200ms")} @keyframes note-pulse { from, to { scale: 1 } 50% { scale: 1.1 } }`;
+  const { rules, flags } = migrate(css);
+  assert.deepEqual(rules[".blyrics-container"], { "--blyrics-instrumental-icon": '"♫"', "--blyrics-instrumental-pulse-scale": "1.1", "--blyrics-instrumental-pulse-duration": "1.2s" });
+  assert.deepEqual(flags, []);
+});
+
+test("a pulse that does not come back, or stops, is left to the author", () => {
+  for (const [frames, animation] of [
+    ["from { transform: scale(1) } to { transform: scale(1.1) }", "note-pulse 1.5s infinite"],
+    ["50% { transform: scale(1.1) }", "note-pulse 1.5s 3"],
+  ]) {
+    const css = `${NOTE_PULSE.replaceAll("note-pulse 1.5s ease-in-out infinite", animation)} @keyframes note-pulse { ${frames} }`;
+    const { rules, flags } = migrate(css);
+    assert.deepEqual(rules[".blyrics-container"], { "--blyrics-instrumental-icon": '"♫"' }, animation);
+    assert.ok(flags.some((flag) => /pulse-scale was not written/.test(flag.message)), animation);
+  }
+});
+
+test("Apple Music's three dots become the dots icon", () => {
+  // Minimalism Music: a bar masked into dots, its fill slid across, breathing while sung.
+  const css = `#blyrics-wrapper .blyrics--instrumental .blyrics--instrumental-icon, #blyrics-wrapper .blyrics--instrumental.blyrics--line::after { display: none !important }
+    #blyrics-wrapper .blyrics--instrumental.blyrics--line::before { content: ""; background: linear-gradient(90deg, white 40%, gray 60%); mask: radial-gradient(circle at .18em 50%, #000 .17em, transparent .18em) 0 0 / .68em 100% repeat-x }
+    #blyrics-wrapper .blyrics--instrumental.blyrics--line.blyrics--active::before { animation: am-dots-slide var(--am-dur) linear forwards, am-dots-breathe 3s ease-in-out infinite }
+    @media (prefers-reduced-motion: reduce) { #blyrics-wrapper .blyrics--instrumental.blyrics--line.blyrics--active::before { animation: am-dots-slide var(--am-dur) linear forwards } }
+    @keyframes am-dots-slide { from { background-position: 100% 0 } to { background-position: 0% 0 } }
+    @keyframes am-dots-breathe { 0%, 100% { transform: scale(1) } 50% { transform: scale(1.14) } }`;
+  const { rules, flags, unsupported } = migrate(css);
+  assert.deepEqual(rules[".blyrics-container"], { "--blyrics-instrumental-icon": "dots", "--blyrics-instrumental-pulse-scale": "1.14", "--blyrics-instrumental-pulse-duration": "3s" });
+  assert.deepEqual([flags, unsupported], [[], []]);
+});
+
+test("other drawings on the instrumental line are left to the author, with the dots suggested", () => {
+  const { output, flags, unsupported } = migrate(`.blyrics--instrumental.blyrics--line::before { content: ""; background: white; border-radius: 50% }`);
+  assert.doesNotMatch(output, /WebGL renderer \(begin\)/);
+  assert.ok(flags.some((flag) => flag.message.includes("--blyrics-instrumental-icon: dots")));
+  assert.deepEqual(unsupported.map((u) => u.code), ["pseudo-content"]);
+});
+
+test("instrumental notes that differ, apply to some screens, or that the author set are not written", () => {
+  for (const css of [
+    `.blyrics--instrumental.blyrics--line::after { content: "♫" } .blyrics--line:has(.blyrics-bidi-run:empty) .blyrics-line-main::before { content: "♪" }`,
+    `@media (max-width: 600px) { .blyrics--instrumental.blyrics--line::after { content: "♫" } }`,
+    `#layout[player-fullscreened] .blyrics--instrumental.blyrics--line::after { content: "♫" }`,
+    `.blyrics-container { --blyrics-instrumental-icon: dots } .blyrics--instrumental.blyrics--line::after { content: "♫" }`,
+  ]) {
+    const { rules, flags } = migrate(css);
+    assert.equal(rules[".blyrics-container"]?.["--blyrics-instrumental-icon"], undefined, css);
+    assert.ok(flags.some((flag) => flag.code === "review"), css);
+  }
+});
+
+// Glassy Blur, Lucid, Lyric Glow and Minimalism Music draw the no-lyrics state on the line's
+// pseudo-elements.
+const NO_LYRICS = '.blyrics-container[data-no-lyrics="true"]';
+
+test("the no-lyrics line's content becomes the no-lyrics message and icon", () => {
+  const css = `${NO_LYRICS} .blyrics-line-main { display: none !important }
+    ${NO_LYRICS} .blyrics--line::before { content: "\\266B"; font-size: 6rem; font-weight: 400; color: rgba(255,255,255,.28); margin-bottom: .5rem }
+    ${NO_LYRICS} .blyrics--line::after { content: "No lyrics found"; font-size: 2rem; font-weight: 600 }
+    ${NO_LYRICS} .blyrics--line { display: flex; flex-direction: column }`;
+  const { rules, unsupported } = migrate(css);
+  assert.deepEqual(rules[".blyrics-container"], { "--blyrics-no-lyrics-text": '"No lyrics found"', "--blyrics-no-lyrics-icon": '"\\266B"' });
+  assert.deepEqual(rules[`${NO_LYRICS} .blyrics-no-lyrics-icon`], {});
+  assert.match(migrate(css).output, /\.blyrics-no-lyrics-icon \{\n {2}font-size: 6rem;\n {2}color: rgba\(255,255,255,\.28\);\n\}/);
+  assert.match(migrate(css).output, /data-no-lyrics="true"\] \.blyrics--line \{\n {2}font-size: 2rem;\n {2}font-weight: 600;\n\}/);
+  assert.deepEqual(unsupported, []);
+});
+
+test("the message's size is left to the author where moving it would change the theme", () => {
+  const cases = [
+    // The line has its own size already.
+    [`${NO_LYRICS} .blyrics--line { font-size: 3rem }`, "font-size: 2rem", "sets font-size"],
+    // Relative to the line it is on.
+    ["", "font-size: 1.5em", "relative"],
+    // The icon would inherit it on the current renderer.
+    [`${NO_LYRICS} .blyrics--line::before { content: "♫" }`, "font-size: 2rem", "icon's `::before` would take it"],
+  ];
+  for (const [extra, size, why] of cases) {
+    const { output, flags } = migrate(`${extra} ${NO_LYRICS} .blyrics--line::after { content: "No lyrics"; ${size} }`);
+    assert.match(output, /--blyrics-no-lyrics-text: "No lyrics";/);
+    assert.doesNotMatch(output, /\.blyrics--line \{\n {2}font-size/, why);
+    assert.ok(flags.some((flag) => flag.message.includes(why)), why);
+  }
+});
+
+test("an empty no-lyrics icon draws nothing, and other line pseudo-elements stay flagged", () => {
+  // Minimalism Music's icon is an empty string; Lyric Glow's aurora is on every other line.
+  const css = `${NO_LYRICS} .blyrics--line::before { content: ""; font-size: 10rem } ${NO_LYRICS} .blyrics--line::after { content: 'Guess' }
+    .blyrics-container:not([data-no-lyrics="true"]) > .blyrics--line::before { content: ""; background: radial-gradient(white, transparent) }`;
+  const { rules, unsupported } = migrate(css);
+  assert.deepEqual(rules[".blyrics-container"], { "--blyrics-no-lyrics-text": "'Guess'" });
+  assert.equal(rules[`${NO_LYRICS} .blyrics-no-lyrics-icon`], undefined);
+  assert.deepEqual(unsupported.map((u) => u.where), [['.blyrics-container:not([data-no-lyrics="true"]) > .blyrics--line::before']]);
+});
+
+test("the no-lyrics message stays on the container when the line values differ by sync type", () => {
+  const css = `.blyrics-container[data-sync="synced"] > .blyrics--line:not(.blyrics--active) { opacity: .5 } ${NO_LYRICS} .blyrics--line::after { content: "None" }`;
+  const { rules } = migrate(css);
+  assert.deepEqual(rules[".blyrics-container"], { "--blyrics-no-lyrics-text": '"None"' });
+  assert.deepEqual(rules['.blyrics-container[data-sync="synced"]'], { "--blyrics-line-opacity": "1 0.5" });
+});
+
+test("a message size the line takes on some screens is the author's", () => {
+  const { output, flags } = migrate(`@media (max-width: 600px) { ${NO_LYRICS} .blyrics--line { font-size: 1rem } } ${NO_LYRICS} .blyrics--line::after { content: "No lyrics"; font-size: 2rem }`);
+  assert.doesNotMatch(output, /\.blyrics--line \{\n {2}font-size/);
+  assert.ok(flags.some((flag) => flag.message.includes("sets font-size")));
+});

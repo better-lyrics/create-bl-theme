@@ -49,6 +49,29 @@ export function parseRules(css) {
   return rules.filter((rule) => rule.declarations.length > 0);
 }
 
+/**
+ * The `@keyframes` in `css` by name, the last of each wherever it is: a list of
+ * { selector, declarations } with the stops (`0%`, `from`, `0%, 100%`) as selectors.
+ */
+export function parseKeyframes(css) {
+  const text = blankComments(css);
+  const out = new Map();
+  for (const m of text.matchAll(/@(?:-[\w-]+-)?keyframes\s+([^\s{]+)\s*\{/gi)) {
+    const start = m.index + m[0].length;
+    let depth = 1;
+    let end = start;
+    for (; end < text.length && depth > 0; end++) {
+      const ch = text[end];
+      if (ch === "\\") end++;
+      else if (ch === '"' || ch === "'") end = endOfString(text, end);
+      else if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+    }
+    out.set(m[1].replace(/^["']|["']$/g, ""), parseRules(text.slice(start, end - 1)));
+  }
+  return out;
+}
+
 function nest(parent, head) {
   const outer = splitTopLevel(parent, ",");
   return splitTopLevel(head, ",")

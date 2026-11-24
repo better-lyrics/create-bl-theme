@@ -107,7 +107,9 @@ With `--write` it appends the variables below in a block marked `create-bl-theme
 - `--blyrics-word-past-opacity`, from `[data-word-state="past"]` opacity in the sung line;
 - `--blyrics-word-rest-transform`, from a word transform that `.blyrics--animating` (or an animation on sung words) undoes;
 - `--blyrics-text-shadow`, from each `text-shadow` on lyric text whose selector has no state;
-- the `--blyrics-*` variables a theme sets on `.blyrics--word::after`, copied onto the matching `.blyrics--word` selector.
+- the `--blyrics-*` variables a theme sets on `.blyrics--word::after`, copied onto the matching `.blyrics--word` selector;
+- `--blyrics-instrumental-icon`, from the note a theme draws on the instrumental line's `::before` / `::after` (or the empty line's `.blyrics-line-main::before`), and `--blyrics-instrumental-pulse-scale` / `-duration`, from the scale of the animation that note runs while the line is sung;
+- `--blyrics-no-lyrics-text` and `--blyrics-no-lyrics-icon`, from the `content` of `.blyrics-container[data-no-lyrics="true"] .blyrics--line::after` and `::before`, with the icon's `font-size` and `color` on `.blyrics-no-lyrics-icon` and the message's `font-size` and `font-weight` on the no-lyrics line.
 
 The line variables are read once, from `.blyrics-container`, which carries `data-sync`. Rules under `.blyrics-container[data-sync="richsync"]` or `[data-sync="synced"]` count for that sync type only, so when the two differ the values are written under each `[data-sync]` selector. Custom properties the theme sets on `:root`, the container or the sung line are filled in, and `calc()` over plain numbers is worked out.
 
@@ -129,7 +131,7 @@ It never replaces a `--blyrics-*` value the theme already sets, and it writes no
 
 - Paint on lyric elements: `opacity`, `filter`, `transform`, `scale`, `color`, `text-shadow`, `background`, `border`, `box-shadow`, `outline`, `-webkit-text-stroke`, `mix-blend-mode`. The variables below stand in for the common cases.
 - `animation`, `transition` and `@keyframes` on lyric elements. The renderer times its own effects.
-- `::before` / `::after` on lyric elements. The word's `::after` was the DOM renderer's sweep overlay; the WebGL renderer draws the sweep itself, so rules that only tuned it (`animation: none` and the like) need nothing.
+- `::before` / `::after` on lyric elements. The word's `::after` was the DOM renderer's sweep overlay; the WebGL renderer draws the sweep itself, so rules that only tuned it (`animation: none` and the like) need nothing. A note on instrumental lines and the no-lyrics message and icon have variables (below).
 - The state classes are never set: `.blyrics--active`, `.blyrics--animating`, `.blyrics--paused` and `[data-word-state]` match nothing, so rules keyed off them do nothing, and variables set under them are never read. `.blyrics-user-scrolling` is still set on the container.
 - `:hover` on lines, except the opacity, blur and scale of the hovered line and the opacity of the others, which have variables (below).
 
@@ -207,6 +209,39 @@ The `translate` and `scale` properties on waiting words (`[data-word-state="upco
 
 **Text shadow.** `--blyrics-text-shadow` takes `text-shadow` syntax and is drawn once under the text of lines, words, translations and romanizations. It is read per element and is static: the same whether a line is sung, hovered or neither. So `.blyrics--translated { text-shadow: 0 2px 12px rgb(0 0 0 / .12) }` becomes `.blyrics--translated { --blyrics-text-shadow: 0 2px 12px rgb(0 0 0 / .12) }`, and a shadow that changes with state has no equivalent.
 
+**The instrumental icon.** `--blyrics-instrumental-icon` picks what instrumental lines show: `note` (the default, filling from the bottom), `dots` (Apple Music's three dots, lit one after another over the instrumental) or a CSS string such as `"♫"` or `"\266B"`, drawn at the line's font size, filling from the bottom and glowing like the note. While the instrumental plays, the icon swells to `--blyrics-instrumental-pulse-scale` (default 1, no pulse) and back once every `--blyrics-instrumental-pulse-duration` (default `1.5s`). They are read once from `.blyrics-container`.
+
+```css
+.blyrics--instrumental-icon { display: none; }
+.blyrics--instrumental.blyrics--line::after { content: "♫"; }
+.blyrics--active.blyrics--instrumental.blyrics--line::after { animation: note-pulse 1.5s ease-in-out infinite; }
+@keyframes note-pulse { 50% { opacity: 1; transform: scale(105%); } }
+/* becomes */
+.blyrics-container {
+  --blyrics-instrumental-icon: "♫";
+  --blyrics-instrumental-pulse-scale: 1.05;
+}
+```
+
+- The CLI reads the note from the instrumental line's `::before` or `::after`, or the empty line's `.blyrics--line:has(.blyrics-bidi-run:empty) .blyrics-line-main::before`, and the pulse from the largest scale in the keyframes that note runs while the line is sung. Only the scale carries over; opacity or shadows in those keyframes do not.
+- An empty `content` with a `radial-gradient()` mask repeated in x is taken for the three dots. Anything else drawn there is left to you, since the renderer draws only these icons.
+
+**No lyrics.** When a song has no lyrics, `--blyrics-no-lyrics-text` (a CSS string) replaces the host's message, and `--blyrics-no-lyrics-icon` (a CSS string) is drawn above it, in a real `.blyrics-no-lyrics-icon` element (display block, `4em` by default). Both are read once from `.blyrics-container`. The icon's size and colour are its own `font-size` and `color`; the message takes the line's style.
+
+```css
+.blyrics-container[data-no-lyrics="true"] .blyrics--line::before { content: "♫"; font-size: 6rem; }
+.blyrics-container[data-no-lyrics="true"] .blyrics--line::after { content: "No lyrics found"; font-size: 2rem; }
+/* becomes */
+.blyrics-container {
+  --blyrics-no-lyrics-text: "No lyrics found";
+  --blyrics-no-lyrics-icon: "♫";
+}
+.blyrics-container[data-no-lyrics="true"] .blyrics-no-lyrics-icon { font-size: 6rem; }
+.blyrics-container[data-no-lyrics="true"] .blyrics--line { font-size: 2rem; }
+```
+
+The CLI writes the message's `font-size` and `font-weight` onto the line only where that changes nothing on the current renderer: not where the theme sets them on the line already, not when they are relative (`em`, `%`), and not when the icon's `::before` would inherit them. It flags those for you.
+
 **Colours.** Set variables, not `color`:
 - `--blyrics-lyric-inactive-color`: words not yet sung.
 - `--blyrics-lyric-active-color`: the sung part of a word.
@@ -240,7 +275,7 @@ Some effects have no variable yet:
 - text shadows that change with state, and outlines, strokes, backgrounds or borders on lyrics
 - filters other than `blur()`, `saturate()` and `brightness()`
 - per-word opacity other than sung words in the sung line, or other styles keyed off a word's state
-- `::before` / `::after` decorations
+- `::before` / `::after` decorations other than the instrumental icon and the no-lyrics message
 - custom keyframe animations
 - rotated or skewed text
 
