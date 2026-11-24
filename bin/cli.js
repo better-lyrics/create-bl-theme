@@ -1085,9 +1085,25 @@ async function migrate(target, { write } = {}) {
   }
   const webgl = migrateForWebgl(engine.output, compiled);
   const output = webgl.output;
-  const changes = [...engine.changes, ...webgl.changes];
-  const flags = [...engine.flags, ...webgl.flags.map(placed)];
-  const unsupported = webgl.unsupported.map(placed);
+  // The two passes are reported apart: the WebGL findings stand on their own, and the old engine's
+  // still matter to the current DOM renderer. A flag the WebGL block settles is not repeated.
+  const sections = [
+    {
+      title: "WebGL renderer",
+      changes: webgl.changes,
+      flags: webgl.flags.map(placed),
+      unsupported: webgl.unsupported.map(placed),
+    },
+    {
+      title: "Current renderer (left over from the old animation engine)",
+      changes: engine.changes,
+      flags: engine.flags.filter((f) => !webgl.settles.includes(f.code)),
+      unsupported: [],
+    },
+  ];
+  const changes = sections.flatMap((s) => s.changes);
+  const flags = sections.flatMap((s) => s.flags);
+  const unsupported = sections.flatMap((s) => s.unsupported);
 
   const rel = path.relative(process.cwd(), stylePath);
   const shown = rel && !rel.startsWith("..") ? rel : stylePath;
@@ -1102,25 +1118,31 @@ async function migrate(target, { write } = {}) {
     return;
   }
 
-  if (changes.length > 0) {
-    console.log(pc.green(pc.bold("  Applied automatically:")));
-    changes.forEach((c) => console.log(pc.dim(`    L${c.line}  `) + c.message));
+  for (const section of sections) {
+    if (section.changes.length === 0 && section.flags.length === 0 && section.unsupported.length === 0) continue;
+    console.log(pc.bold(pc.underline(`  ${section.title}`)));
     console.log();
-  }
 
-  if (flags.length > 0) {
-    console.log(pc.yellow(pc.bold("  Needs review (not changed):")));
-    flags.forEach((f) => console.log(pc.yellow(`    ${f.at}  `) + f.message));
-    console.log();
-  }
+    if (section.changes.length > 0) {
+      console.log(pc.green(pc.bold("  Applied automatically:")));
+      section.changes.forEach((c) => console.log(pc.dim(`    L${c.line}  `) + c.message));
+      console.log();
+    }
 
-  if (unsupported.length > 0) {
-    console.log(pc.magenta(pc.bold("  Not possible in the WebGL renderer yet:")));
-    unsupported.forEach((f) => console.log(pc.magenta(`    ${f.at}  `) + f.message));
-    console.log();
-    console.log(pc.magenta("  If your theme needs one of these, ask in the Better Lyrics Discord so it can be added to"));
-    console.log(pc.magenta("  the renderer: ") + pc.cyan(DISCORD_URL));
-    console.log();
+    if (section.flags.length > 0) {
+      console.log(pc.yellow(pc.bold("  Needs review (not changed):")));
+      section.flags.forEach((f) => console.log(pc.yellow(`    ${f.at}  `) + f.message));
+      console.log();
+    }
+
+    if (section.unsupported.length > 0) {
+      console.log(pc.magenta(pc.bold("  Not possible in the WebGL renderer yet:")));
+      section.unsupported.forEach((f) => console.log(pc.magenta(`    ${f.at}  `) + f.message));
+      console.log();
+      console.log(pc.magenta("  If your theme needs one of these, ask in the Better Lyrics Discord so it can be added to"));
+      console.log(pc.magenta("  the renderer: ") + pc.cyan(DISCORD_URL));
+      console.log();
+    }
   }
 
   if (!write) {

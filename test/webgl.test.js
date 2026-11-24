@@ -16,9 +16,19 @@ const SUNG = ".blyrics-container > .blyrics--active";
 
 function migrate(css) {
   const result = migrateForWebgl(css, css);
-  const block = result.output.match(/WebGL renderer \(begin\)[\s\S]*?WebGL renderer \(end\)/)?.[0] ?? "";
-  const written = Object.fromEntries([...block.matchAll(/--blyrics-line-([\w-]+): ([^;]*);/g)].map((m) => [m[1], m[2]]));
-  return { ...result, written };
+  const rules = blockRules(result.output);
+  const written = Object.fromEntries(Object.entries(rules[".blyrics-container"] ?? {}).filter(([name]) => name.startsWith("--blyrics-line-")).map(([name, value]) => [name.slice("--blyrics-line-".length), value]));
+  return { ...result, written, rules };
+}
+
+/** The block's rules, as { selector: { name: value } }. */
+function blockRules(output) {
+  const block = output.match(/\/\* create-bl-theme migrate: WebGL renderer \(begin\)[\s\S]*?WebGL renderer \(end\) \*\//)?.[0] ?? "";
+  const rules = {};
+  for (const [, selector, body] of block.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    rules[selector.trim()] = Object.fromEntries([...body.matchAll(/(--[\w-]+): ([^;]*);/g)].map((m) => [m[1], m[2]]));
+  }
+  return rules;
 }
 
 /** Nothing written, and the author told. */
@@ -66,7 +76,7 @@ test(":is takes the specificity of its most specific argument", () => {
 });
 
 test("an unreadable value leaves that list to the author", () => {
-  for (const value of ["blur(var(--unknown))", "blur(calc(2px * 2))", "var(--unknown)", "blur(0.2em)"]) {
+  for (const value of ["blur(var(--unknown))", "blur(calc(1em + 2px))", "var(--unknown)", "blur(0.2em)"]) {
     assertLeftToAuthor(`${LINE}:not(.blyrics--active) { filter: ${value} }`);
   }
   assertLeftToAuthor(`${LINE}:not(.blyrics--active) { opacity: var(--unknown) }`);
@@ -146,6 +156,129 @@ test("unsynced and scrolling rules are the renderer's", () => {
   assert.deepEqual(migrate(css).written, {});
 });
 
+test("saturate and brightness in line filters become lists", () => {
+  const css = `${LINE}:not(.blyrics--active) { filter: blur(2px) saturate(80%) brightness(.6) } ${SUNG} + .blyrics--line { filter: blur(1px) }`;
+  assert.deepEqual(migrate(css).written, { "blur-before": "0 2px", "blur-after": "0 1px 2px", "saturate-before": "1 0.8", "saturate-after": "1 1 0.8", "brightness-before": "1 0.6", "brightness-after": "1 1 0.6" });
+  const { unsupported } = migrate(`${LINE}:not(.blyrics--active) { filter: saturate(.5) }`);
+  assert.deepEqual(unsupported, []);
+});
+
+test("calc() over the theme's own numbers is worked out", () => {
+  const css = `:root { --level: .8 } ${LINE}:not(.blyrics--active) { opacity: calc(var(--level) * 0.5); filter: blur(calc(2px * 2)) }`;
+  assert.deepEqual(migrate(css).written, { opacity: "1 0.4", blur: "0 4px" });
+});
+
+test("variables set on the container for one sync type are read for that type", () => {
+  // Minimal and Burn: the visibility is set per sync type, and the other lines' is a calc() of it.
+  const css = `.blyrics-container[data-sync="synced"] { --sung: 1; --next: .15 } .blyrics-container[data-sync="richsync"] { --sung: 1; --next: 1 }
+    .blyrics-container { --browsing: calc(var(--sung) * 0.5) }
+    .blyrics-container > div { opacity: var(--next) } .blyrics-container > div.blyrics--active { opacity: var(--sung) }
+    .blyrics-container:is(:hover, .blyrics-user-scrolling) > div:not(.blyrics--active):not(:hover) { opacity: var(--browsing) }`;
+  const { rules, unsupported } = migrate(css);
+  assert.deepEqual(rules['.blyrics-container[data-sync="synced"]'], { "--blyrics-line-opacity": "1 0.15", "--blyrics-line-opacity-browsing": "0.5" });
+  assert.deepEqual(rules['.blyrics-container[data-sync="richsync"]'], { "--blyrics-line-opacity-browsing": "0.5" });
+  assert.equal(rules[".blyrics-container"], undefined);
+  assert.deepEqual(unsupported, []);
+});
+
+test("rules for one sync type are written under that sync type", () => {
+  const css = `.blyrics-container[data-sync="richsync"] > .blyrics--line:not(.blyrics--active) { opacity: .5 } ${LINE}:not(.blyrics--active) { filter: blur(2px) }`;
+  const { rules, flags } = migrate(css);
+  assert.deepEqual(rules['.blyrics-container[data-sync="richsync"]'], { "--blyrics-line-opacity": "1 0.5", "--blyrics-line-blur": "0 2px" });
+  assert.deepEqual(rules['.blyrics-container[data-sync="synced"]'], { "--blyrics-line-blur": "0 2px" });
+  assert.ok(!flags.some((flag) => flag.code === "review"));
+});
+
+test("the other lines while browsing take the browsing opacity only when the hovered line is left out", () => {
+  const browsing = ".blyrics-container:hover > .blyrics--line:not(.blyrics--active)";
+  assert.deepEqual(migrate(`${browsing}:not(:hover) { opacity: .4 }`).written, { "opacity-browsing": "0.4" });
+  const { written, unsupported } = migrate(`${browsing} { opacity: .4 }`);
+  assert.deepEqual(written, {});
+  assert.equal(unsupported.length, 1);
+});
+
+test("browsing does not override a line rule that outweighs it", () => {
+  const css = `${SUNG} + .blyrics--line.blyrics--line.blyrics--line.blyrics--line { opacity: .6 } .blyrics-container:hover > div:not(.blyrics--active):not(:hover) { opacity: .4 }`;
+  const { written, flags } = migrate(css);
+  assert.equal(written["opacity-browsing"], undefined);
+  assert.ok(flags.some((flag) => /browsing/.test(flag.message)));
+});
+
+test("a hovered line under a hovered container is the hovered line", () => {
+  assert.deepEqual(migrate(`.blyrics-container:hover > .blyrics--line:hover { opacity: 1 }`).written, { "hover-opacity": "1" });
+});
+
+test("sung words in the sung line take the past opacity", () => {
+  // Opacity Based Karaoke: the opacity comes through a variable set on the line being sung.
+  const css = `:root { --past-current: .7 }
+    .blyrics-container[data-sync="richsync"] .blyrics--line.blyrics--animating:has([data-word-state="active"]) { --w-past: var(--past-current) }
+    .blyrics-container[data-sync="richsync"] .blyrics--line .blyrics--word[data-word-state="past"] { opacity: var(--w-past) }`;
+  const { rules, unsupported } = migrate(css);
+  assert.deepEqual(rules['.blyrics-container[data-sync="richsync"] .blyrics--line .blyrics--word'], { "--blyrics-word-past-opacity": "0.7" });
+  assert.deepEqual(unsupported, []);
+});
+
+test("a background line whose words are all sung dims its words", () => {
+  const { rules } = migrate(`.blyrics--line .blyrics-background-line:not(:has(.blyrics--word:not([data-word-state="past"]))) { opacity: 0.7 }`);
+  assert.deepEqual(rules[".blyrics--line .blyrics-background-line"], { "--blyrics-word-past-opacity": "0.7" });
+});
+
+test("sung words that keep their opacity need nothing", () => {
+  const { output, unsupported } = migrate(`.blyrics--word[data-word-state="past"] { opacity: 1 } .blyrics-word-highlight[data-word-state="past"] { opacity: 1 !important }`);
+  assert.doesNotMatch(output, /WebGL renderer \(begin\)/);
+  assert.deepEqual(unsupported, []);
+});
+
+test("upcoming words still need their colour's alpha", () => {
+  const { output, unsupported } = migrate(`.blyrics--word[data-word-state="upcoming"] { opacity: .4 }`);
+  assert.doesNotMatch(output, /WebGL renderer \(begin\)/);
+  assert.equal(unsupported[0].code, "word-opacity");
+});
+
+test("words lowered until sung take the rest transform", () => {
+  // Apple Music, with the old engine's `> span >` that matches nothing now.
+  const css = `.blyrics--line > span > .blyrics--word { transform: translateY(3px); transition: transform calc(var(--blyrics-duration, 0ms) + 300ms) ease-out }
+    .blyrics--line > span > .blyrics--word.blyrics--animating { transform: translateY(0); animation: none }`;
+  const { rules, flags } = migrate(css);
+  assert.deepEqual(rules[".blyrics--line .blyrics--word"], { "--blyrics-word-rest-transform": "translateY(3px)" });
+  assert.deepEqual(rules[".blyrics-container"], { "--blyrics-word-rise-extra-duration": "0.3s", "--blyrics-word-rise-easing": "ease-out" });
+  assert.ok(!flags.some((flag) => flag.code === "line-transform"));
+});
+
+test("the scale and translate properties make a rest transform", () => {
+  // Spicy for YTM: the pose is on the words waiting in the lines around the sung one.
+  const css = `:root { --rest-scale: .95; --rest-y: .01em }
+    .blyrics-container[data-sync="richsync"] > .blyrics--line:is(.blyrics--active, .blyrics--animating, .blyrics--active + .blyrics--line) .blyrics--word[data-word-state="upcoming"] { scale: var(--rest-scale); translate: 0 var(--rest-y) }
+    .blyrics-container[data-sync="richsync"] > .blyrics--line:is(.blyrics--active, .blyrics--animating) .blyrics--word:not([data-word-state="upcoming"]) { animation: lift 1s linear }`;
+  const { rules } = migrate(css);
+  assert.deepEqual(rules['.blyrics-container[data-sync="richsync"] > .blyrics--line .blyrics--word'], { "--blyrics-word-rest-transform": "translateY(0.01em) scale(0.95)" });
+});
+
+test("a word transform nothing undoes is not a rest pose", () => {
+  const { output, flags } = migrate(`.blyrics--word { transform: translateY(3px) }`);
+  assert.doesNotMatch(output, /WebGL renderer \(begin\)/);
+  assert.ok(flags.some((flag) => flag.code === "line-transform"));
+});
+
+test("a static text shadow is drawn, one that changes with state is not", () => {
+  const css = `.blyrics-container .blyrics--word { text-shadow: 0 2px 4px rgba(0, 0, 0, .05) } .blyrics-container .blyrics--word.blyrics--animating { text-shadow: 0 0 8px white }
+    .blyrics-highlight-run { text-shadow: none } .blyrics--translated { text-shadow: 0 1px 2px black !important }`;
+  const { rules, unsupported } = migrate(css);
+  assert.deepEqual(rules[".blyrics-container .blyrics--word"], { "--blyrics-text-shadow": "0 2px 4px rgba(0, 0, 0, .05)" });
+  assert.deepEqual(rules[".blyrics--translated"], { "--blyrics-text-shadow": "0 1px 2px black !important" });
+  assert.deepEqual(unsupported.map((u) => u.code), ["state-shadow"]);
+});
+
+test("variables on the word's ::after move onto the word", () => {
+  const css = `.blyrics--word::after { --blyrics-glow-color: transparent; animation: none } .blyrics--word[data-long-word]::after { --blyrics-glow-color: white }
+    .blyrics--word.blyrics-line-synced-word::after { animation: none !important }`;
+  const { rules, flags, unsupported, settles } = migrate(css);
+  assert.deepEqual(rules[".blyrics--word"], { "--blyrics-glow-color": "transparent" });
+  assert.deepEqual(rules[".blyrics--word[data-long-word]"], { "--blyrics-glow-color": "white" });
+  assert.deepEqual([flags, unsupported], [[], []]);
+  assert.deepEqual(settles, ["var-on-pseudo"]);
+});
+
 test("braces in strings do not end a rule", () => {
   const css = `#side-panel::after { content: "}" } ${LINE}:not(.blyrics--active) { opacity: .3 }`;
   assert.deepEqual(migrate(css).written, { opacity: "1 0.3" });
@@ -178,4 +311,21 @@ test("the command writes a .rics theme", () => {
   const { output, status } = runCli("style.rics", `$dim: .3;\n.blyrics-container {\n  > .blyrics--line:not(.blyrics--active) { opacity: $dim; }\n}\n`);
   assert.equal(status, 0);
   assert.match(output, /--blyrics-line-opacity: 1 0\.3;/);
+});
+
+test("the old engine's findings are reported apart from the WebGL renderer's", () => {
+  const { stdout } = runCli("style.css", `${LINE}:not(.blyrics--active) { opacity: .3 }\n.blyrics--pre-animating { color: red }\n.blyrics--word::after { --blyrics-glow-color: red }\n`);
+  const webgl = stdout.indexOf("WebGL renderer\n");
+  const current = stdout.indexOf("Current renderer");
+  assert.ok(webgl >= 0 && current > webgl, stdout);
+  assert.ok(stdout.indexOf(".blyrics--pre-animating` was removed") > current);
+  // Copying the variables onto the word settles the old engine's note about them.
+  assert.doesNotMatch(stdout, /sets an engine variable on `::after`/);
+});
+
+test("a container that always holds while a song plays is no state, and is left out of the selector", () => {
+  // reCover: the shadow is under `.blyrics-container:has(.blyrics--active)`.
+  const { rules, unsupported } = migrate(`.blyrics-container:has(.blyrics--active) .blyrics--word { text-shadow: 0 .3rem .5rem rgba(0, 0, 0, .15) } .blyrics-container:has(.blyrics--active) .blyrics--word:after { text-shadow: none }`);
+  assert.deepEqual(rules[".blyrics-container .blyrics--word"], { "--blyrics-text-shadow": "0 .3rem .5rem rgba(0, 0, 0, .15)" });
+  assert.deepEqual(unsupported, []);
 });

@@ -80,10 +80,12 @@ Most themes need nothing: every color, font, and layout variable is preserved. S
 
 Better Lyrics is moving to a WebGL renderer that draws the lyrics on a canvas. Theme variables and comment settings still apply. Rules that paint the lyric elements themselves do not: opacity, filters, transforms, colors, shadows and animations on lines and words, and anything keyed off `.blyrics--active` or `.blyrics--animating`. The same `migrate` command covers it:
 
-- **Writes automatically:** it reads your line opacity and blur rules (the "dim and blur lines around the sung one" effect most themes have) and appends the equivalent `--blyrics-line-opacity-*` / `--blyrics-line-blur-*` lists, plus your `:hover` rules' opacity, blur and scale as `--blyrics-line-hover-*`. The current renderer ignores these, so the theme keeps working on both.
-- **Leaves to you, with a note:** what one list for every line can't say (media queries, single views or lines, values it can't read). It never replaces values you wrote.
+- **Writes automatically:** it reads your line opacity and filter rules (the "dim and blur lines around the sung one" effect most themes have) and appends the equivalent `--blyrics-line-opacity-*`, `-blur-*`, `-saturate-*` and `-brightness-*` lists, plus your `:hover` rules' opacity, blur and scale as `--blyrics-line-hover-*` and the other lines' opacity while browsing as `--blyrics-line-opacity-browsing`. For words it writes the past-word opacity in the sung line (`--blyrics-word-past-opacity`), the Apple Music style lift (`--blyrics-word-rest-transform`) and static text shadows (`--blyrics-text-shadow`), and it copies variables you set on `.blyrics--word::after` onto the word. Rules for one sync type (`.blyrics-container[data-sync="richsync"]`) are written for that sync type. The current renderer ignores these, so the theme keeps working on both.
+- **Leaves to you, with a note:** what the variables can't say (media queries, single views or lines, values it can't read). It never replaces values you wrote.
 - **Flags with a replacement:** colors, scale and spacing, which have variables.
-- **Flags as not possible yet:** effects the renderer has no equivalent for, such as text shadows, non-blur filters and hover styles beyond opacity, blur and scale. If your theme needs one, ask in the [Better Lyrics Discord](https://discord.gg/UsHE3d5fWF) so it can be added to the renderer.
+- **Flags as not possible yet:** effects the renderer has no equivalent for, such as text shadows that change with state, filters other than blur, saturate and brightness, and hover styles beyond those above. If your theme needs one, ask in the [Better Lyrics Discord](https://discord.gg/UsHE3d5fWF) so it can be added to the renderer.
+
+The preview lists the WebGL findings first, then, under their own heading, what's left from the old animation engine for the current renderer.
 
 ```bash
 # Preview, then apply

@@ -101,33 +101,41 @@ npx create-bl-theme@beta migrate ./their-theme          # preview, nothing is wr
 npx create-bl-theme@beta migrate ./their-theme --write  # apply the automatic fixes in place
 ```
 
-With `--write` it reads the theme's line opacity, blur and `:hover` rules and appends the matching distance lists and hover values (below) in a block marked `create-bl-theme migrate: WebGL renderer`. Re-running updates that block in place. The current DOM renderer ignores these variables, so a migrated theme works on both renderers: keep the old rules until the WebGL renderer has shipped.
+With `--write` it appends the variables below in a block marked `create-bl-theme migrate: WebGL renderer`. Re-running updates that block in place. The current DOM renderer ignores these variables, so a migrated theme works on both renderers: keep the old rules until the WebGL renderer has shipped. It writes:
+- the distance lists and hover values, from the theme's line `opacity`, `filter` (`blur()`, `saturate()`, `brightness()`) and `:hover` rules;
+- `--blyrics-line-opacity-browsing`, from a rule that dims the other lines while the mouse is over the lyrics;
+- `--blyrics-word-past-opacity`, from `[data-word-state="past"]` opacity in the sung line;
+- `--blyrics-word-rest-transform`, from a word transform that `.blyrics--animating` (or an animation on sung words) undoes;
+- `--blyrics-text-shadow`, from each `text-shadow` on lyric text whose selector has no state;
+- the `--blyrics-*` variables a theme sets on `.blyrics--word::after`, copied onto the matching `.blyrics--word` selector.
+
+The line variables are read once, from `.blyrics-container`, which carries `data-sync`. Rules under `.blyrics-container[data-sync="richsync"]` or `[data-sync="synced"]` count for that sync type only, so when the two differ the values are written under each `[data-sync]` selector. Custom properties the theme sets on `:root`, the container or the sung line are filled in, and `calc()` over plain numbers is worked out.
 
 It writes a value only where the CSS cascade settles it. It leaves these to you, with a review note:
 - rules inside media, container and support queries;
 - rules for one view (fullscreen, Picture-in-Picture, video mode) or only some lines (`:first-child`, `:empty`, one `data-agent`);
-- values it cannot read, such as `calc()`, `em` blurs or variables set outside `:root` and the container;
-- hover values that differ from line to line, or that would show lines the theme hides from the mouse.
+- values it cannot read, such as `min()`/`clamp()`, `calc()` mixing units, `em` blurs, or variables set elsewhere;
+- hover and browsing values that differ from line to line, or that would show lines the theme hides from the mouse.
 
-It never replaces a `--blyrics-line-*` value the theme already sets, and it writes nothing for a `.rics` file that does not compile.
+It never replaces a `--blyrics-*` value the theme already sets, and it writes nothing for a `.rics` file that does not compile. The preview lists the WebGL findings first, then, under their own heading, what the old animation engine's rules still need for the current DOM renderer.
 
 ### What still works
 
 - Every `--blyrics-*` variable for colour, font, size, spacing and timing, and every `/* blyrics-key = value; */` comment setting.
-- Selectors that scope variables. Colours resolve per element, so `[data-agent="v2"] { --blyrics-lyric-active-color: … }` or `.blyrics-word-highlight:not([data-long-word]) { --blyrics-glow-color: transparent; }` still apply to just those lines or words.
+- Selectors that scope variables. Colours resolve per element, so `[data-agent="v2"] { --blyrics-lyric-active-color: … }` or `.blyrics-word-highlight:not([data-long-word]) { --blyrics-glow-color: transparent; }` still apply to just those lines or words. Set them on the word, not its `::after`: migrate copies `.blyrics--word::after` variables onto the word.
 - Layout properties on lines: `font-*`, `letter-spacing`, `line-height`, `text-align`. The space around a line is `--blyrics-padding`; the renderer sets lines' and words' own `padding` and `margin`.
 
 ### What no longer shows
 
-- Paint on lyric elements: `opacity`, `filter`, `transform`, `scale`, `color`, `text-shadow`, `background`, `border`, `box-shadow`, `outline`, `-webkit-text-stroke`, `mix-blend-mode`.
+- Paint on lyric elements: `opacity`, `filter`, `transform`, `scale`, `color`, `text-shadow`, `background`, `border`, `box-shadow`, `outline`, `-webkit-text-stroke`, `mix-blend-mode`. The variables below stand in for the common cases.
 - `animation`, `transition` and `@keyframes` on lyric elements. The renderer times its own effects.
-- `::before` / `::after` on lyric elements.
-- The state classes are never set: `.blyrics--active`, `.blyrics--animating`, `.blyrics--paused` and `[data-word-state]` match nothing, so rules keyed off them do nothing. `.blyrics-user-scrolling` is still set on the container.
-- `:hover` on lines, except the opacity, blur and scale of the hovered line, which have variables (below).
+- `::before` / `::after` on lyric elements. The word's `::after` was the DOM renderer's sweep overlay; the WebGL renderer draws the sweep itself, so rules that only tuned it (`animation: none` and the like) need nothing.
+- The state classes are never set: `.blyrics--active`, `.blyrics--animating`, `.blyrics--paused` and `[data-word-state]` match nothing, so rules keyed off them do nothing, and variables set under them are never read. `.blyrics-user-scrolling` is still set on the container.
+- `:hover` on lines, except the opacity, blur and scale of the hovered line and the opacity of the others, which have variables (below).
 
 ### The replacements
 
-**Fading and blurring lines by distance from the sung line.** This is what most themes build with `.blyrics--active` rules and sibling chains, and it is now two lists of values: one for the sung line, then 1, 2, 3… lines away:
+**Fading, blurring and dimming lines by distance from the sung line.** This is what most themes build with `.blyrics--active` rules and sibling chains, and it is now lists of values: one for the sung line, then 1, 2, 3… lines away:
 
 ```css
 .blyrics-container {
@@ -137,9 +145,10 @@ It never replaces a `--blyrics-line-*` value the theme already sets, and it writ
 }
 ```
 
-- `--blyrics-line-opacity` and `--blyrics-line-blur` apply to both sides. `-before` (lines already sung) and `-after` (lines still to come) replace one side.
+- `--blyrics-line-opacity`, `--blyrics-line-blur`, `--blyrics-line-saturate` and `--blyrics-line-brightness` apply to both sides. `-before` (lines already sung) and `-after` (lines still to come) replace one side.
 - The last value holds beyond the end, so `1 0.5` dims every other line, and a trailing `0` hides the rest.
-- Blurs are in `px` or `rem` and mean what `blur()` means.
+- Blurs are in `px` or `rem` and mean what `blur()` means. Saturations and brightnesses are numbers, `1` for unchanged, and mean what `saturate()` and `brightness()` mean.
+- They are read once from `.blyrics-container`, so per-line selectors do not scope them, but `.blyrics-container[data-sync="richsync"]` or `[data-sync="synced"]` does.
 - The renderer interpolates between whole lines as the view scrolls, and eases the effects off while the reader scrolls. Rules under `.blyrics-user-scrolling` that undo the fade are not needed.
 
 | DOM-renderer rule | WebGL list |
@@ -148,6 +157,7 @@ It never replaces a `--blyrics-line-*` value the theme already sets, and it writ
 | `.blyrics--active ~ .blyrics--line { opacity: .66 }` | `--blyrics-line-opacity-after: 1 0.66` |
 | `.blyrics--line:has(~ .blyrics--active) { opacity: 0 }` | `--blyrics-line-opacity-before: 1 0` |
 | `.blyrics--active + .blyrics--line { filter: blur(2px) }`, `+ .blyrics--line + .blyrics--line { filter: blur(4px) }` | `--blyrics-line-blur-after: 0 2px 4px` |
+| `.blyrics--line:not(.blyrics--active) { filter: saturate(80%) brightness(.6) }` | `--blyrics-line-saturate: 1 0.8` and `--blyrics-line-brightness: 1 0.6` |
 | `visibility: hidden` / `opacity: 0` past some distance | end the opacity list with `0` |
 
 **The line under the mouse.** A `.blyrics--line:hover` rule's opacity, blur and scale become:
@@ -162,7 +172,40 @@ It never replaces a `--blyrics-line-*` value the theme already sets, and it writ
 }
 ```
 
-Each one replaces the line's own value (its distance opacity, its distance blur, its scale) while the pointer is on it; leave one unset to keep the line's own. Nothing else about a hovered line can change, and touch has no hover. Rules that change other lines while the mouse is over the lyrics (`.blyrics-container:hover > div:not(:hover)`) have no equivalent.
+Each one replaces the line's own value (its distance opacity, its distance blur, its scale) while the pointer is on it; leave one unset to keep the line's own. Nothing else about a hovered line can change, and touch has no hover. A `:hover` on the container as well (`.blyrics-container:hover > div:hover`) changes nothing, since the container is hovered whenever a line is.
+
+**The other lines while the reader browses.** While the pointer is over the lyrics or the reader scrolls, every line but the sung and hovered ones eases to `--blyrics-line-opacity-browsing` (a number or percentage, unset by default) over `--blyrics-line-hover-duration`. It replaces:
+
+```css
+.blyrics-container:is(:hover, .blyrics-user-scrolling) > .blyrics--line:not(.blyrics--active):not(:hover) { opacity: 0.5; }
+/* becomes */
+.blyrics-container { --blyrics-line-opacity-browsing: 0.5; }
+```
+
+Other changes to the other lines while browsing (blurring them, say) have no equivalent.
+
+**Sung words in the sung line.** In the line being sung, a word-synced word whose time is over eases to `--blyrics-word-past-opacity` (a number or percentage, default 1) over `--blyrics-lyric-highlight-fade-out-duration`, then goes back to full as the line ends. It is read per word, so a selector scopes it:
+
+```css
+.blyrics--line.blyrics--animating .blyrics--word[data-word-state="past"] { opacity: 0.7; }
+/* becomes */
+.blyrics--line .blyrics--word { --blyrics-word-past-opacity: 0.7; }
+```
+
+Words still to come take the alpha of `--blyrics-lyric-inactive-color`, and the word being sung `--blyrics-lyric-active-color`.
+
+**Words waiting to be sung.** A word holds `--blyrics-word-rest-transform` (translations in px or em and scales, like the wobble transforms; default none) until the sung line reaches it, then eases to none over its own duration plus `--blyrics-word-rise-extra-duration` (default `0.2s`), with `--blyrics-word-rise-easing` (default `ease`). Word-synced lyrics only. This is the Apple Music lift:
+
+```css
+.blyrics--word { transform: translateY(3px); transition: transform calc(var(--blyrics-duration) + 200ms); }
+.blyrics--word.blyrics--animating { transform: translateY(0); }
+/* becomes */
+.blyrics--word { --blyrics-word-rest-transform: translateY(3px); }
+```
+
+The `translate` and `scale` properties on waiting words (`[data-word-state="upcoming"]`) carry over the same way, as `translateY(…) scale(…)`.
+
+**Text shadow.** `--blyrics-text-shadow` takes `text-shadow` syntax and is drawn once under the text of lines, words, translations and romanizations. It is read per element and is static: the same whether a line is sung, hovered or neither. So `.blyrics--translated { text-shadow: 0 2px 12px rgb(0 0 0 / .12) }` becomes `.blyrics--translated { --blyrics-text-shadow: 0 2px 12px rgb(0 0 0 / .12) }`, and a shadow that changes with state has no equivalent.
 
 **Colours.** Set variables, not `color`:
 - `--blyrics-lyric-inactive-color`: words not yet sung.
@@ -176,7 +219,7 @@ Each one replaces the line's own value (its distance opacity, its distance blur,
 
 **Glow.**
 - Size: `--blyrics-highlight-glow-radius-from` / `--blyrics-highlight-glow-radius-to`.
-- Colour: `--blyrics-glow-color`, which can vary per word as above.
+- Colour: `--blyrics-glow-color`, which can vary per word as above. It is read from the word, so set it on `.blyrics--word`, not its `::after`.
 - `--blyrics-highlight-glow-filter-from/-to` are not read.
 
 **Word motion.** `--blyrics-word-wobble-transform-{from,peak,settle,to}`, `--blyrics-letter-wave-*`, the swipe stops `--blyrics-highlight-swipe-*`, and the `--blyrics-animate-*` switches all apply. Transforms there take translations and scales; rotations and skews are ignored.
@@ -193,10 +236,10 @@ Each one replaces the line's own value (its distance opacity, its distance blur,
 ### When something has no equivalent: ask
 
 Some effects have no variable yet:
-- hover styles beyond the hovered line's opacity, blur and scale
-- text shadows, outlines, strokes, backgrounds or borders on lyrics
-- filters other than `blur()`
-- per-word opacity or styles keyed off a word's state
+- hover styles beyond the hovered line's opacity, blur and scale and the other lines' opacity
+- text shadows that change with state, and outlines, strokes, backgrounds or borders on lyrics
+- filters other than `blur()`, `saturate()` and `brightness()`
+- per-word opacity other than sung words in the sung line, or other styles keyed off a word's state
 - `::before` / `::after` decorations
 - custom keyframe animations
 - rotated or skewed text
