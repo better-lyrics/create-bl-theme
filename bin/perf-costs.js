@@ -38,7 +38,7 @@ function changed(theme, names, neutral) {
 function parseList(value) {
   const out = [];
   for (const token of value.split(/[\s,]+/).filter(Boolean)) {
-    const m = /^(-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?)(?:px|rem)?$/i.exec(token);
+    const m = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?:px|rem)?$/.exec(token);
     if (!m) break;
     out.push(Number(m[1]));
   }
@@ -48,21 +48,32 @@ function parseList(value) {
 /**
  * The declarations that give a line distance list (`--blyrics-line-blur`, say) a value other than
  * `neutral` on either side, as the container reads it: `-before` / `-after` where it has a value,
- * else the list for both sides; and those that do on some screens. Null when none do.
+ * else the list for both sides; and those that do on some screens. A list through a `var()` is read
+ * from the custom property where the container gets it, and counted as on when it cannot be.
+ * Null when none do.
  */
 function distanceLists(theme, bases, neutral) {
   const found = new Set();
-  const changes = (d) => parseList(d.value).some((v) => v !== neutral);
   for (const base of bases) {
     for (const sync of ["richsync", "synced"]) {
+      const read = (d) => {
+        let value = d.value;
+        for (let i = 0; i < 8 && value.includes("var("); i++) {
+          value = value.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)/g, (m, name, fallback) => theme.winning(name, sync)?.value ?? fallback?.trim() ?? m);
+        }
+        return value.includes("var(") ? null : parseList(value);
+      };
+      const add = (d) => {
+        const list = read(d);
+        if (list === null) found.add(`${theme.where(d)} (its value comes through \`var()\` and could not be read)`);
+        else if (list.some((v) => v !== neutral)) found.add(theme.where(d));
+      };
       for (const side of ["-before", "-after"]) {
         const own = theme.winning(`${base}${side}`, sync);
-        const d = own && parseList(own.value).length > 0 ? own : theme.winning(base, sync);
-        if (d && changes(d)) found.add(theme.where(d));
+        const d = own && read(own)?.length !== 0 ? own : theme.winning(base, sync);
+        if (d) add(d);
       }
-      for (const name of [base, `${base}-before`, `${base}-after`]) {
-        for (const d of theme.conditional(name, sync)) if (changes(d)) found.add(theme.where(d));
-      }
+      for (const name of [base, `${base}-before`, `${base}-after`]) for (const d of theme.conditional(name, sync)) add(d);
     }
   }
   return found.size ? [...found] : null;

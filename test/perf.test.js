@@ -140,3 +140,26 @@ test("distance lists are parsed as the renderer parses them", () => {
 test("a container that holds for every song with lyrics reads the lists", () => {
   assert.ok(ids('.blyrics-container:not([data-no-lyrics="true"]) { --blyrics-line-blur: 0 2px }').includes("line-blur"));
 });
+
+test("a distance list through var() is read where the container gets it, or counted as on", () => {
+  assert.deepEqual(source(":root { --blur-distance: 0 3px } .blyrics-container { --blyrics-line-blur: var(--blur-distance) }", "line-blur"), ["`--blyrics-line-blur: var(--blur-distance)` on `.blyrics-container`"]);
+  assert.ok(!ids(":root { --blur-distance: 0 0 } .blyrics-container { --blyrics-line-blur: var(--blur-distance) }").includes("line-blur"));
+  assert.deepEqual(source(".blyrics-container { --blyrics-line-blur: var(--set-on-lines) }", "line-blur"), ["`--blyrics-line-blur: var(--set-on-lines)` on `.blyrics-container` (its value comes through `var()` and could not be read)"]);
+});
+
+test("distance list numbers are read as the renderer reads them", () => {
+  assert.ok(ids(".blyrics-container { --blyrics-line-blur: +0 +2. }").includes("line-blur"));
+  assert.ok(!ids(".blyrics-container { --blyrics-line-blur: 0 2PX }").includes("line-blur"));
+});
+
+test("a theme the old engine's fixes would still change is not migrated", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "create-bl-theme-"));
+  try {
+    const file = path.join(dir, "style.css");
+    fs.writeFileSync(file, ".blyrics-zero-dur-animate { font-weight: 700 }\n");
+    const { stdout } = spawnSync(process.execPath, [CLI, "perf", file, "--json"], { encoding: "utf8" });
+    assert.equal(JSON.parse(stdout).migrated, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

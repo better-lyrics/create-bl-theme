@@ -1213,7 +1213,8 @@ function perf(target, { json } = {}) {
   }
   const report = perfReport(css);
   // What migrate would still write: until then the report sees the variables only, not the rules.
-  const migrated = migrateForWebgl(source, compiledStyle(stylePath, withoutBlock(source)).css).output === source;
+  const engine = migrateSource(source).output;
+  const migrated = migrateForWebgl(engine, compiledStyle(stylePath, withoutBlock(engine)).css).output === source;
   const rel = path.relative(process.cwd(), stylePath);
   const shown = rel && !rel.startsWith("..") ? rel : stylePath;
   if (json) {

@@ -1248,16 +1248,29 @@ function textShadows(rules, authored, review, unsupported, cover) {
   }
   // Text inside a line or row with a shadow of its own keeps it in every state in the DOM renderer,
   // but would inherit the line's state shadow: pin that text's state shadow to its own.
+  const textOf = (selector) => simples(lastCompound(selector)).filter((s) => IN_LINE.test(s));
+  const rests = new Map();
+  for (const e of stated.filter((e) => e.state === "rest" && inLine(e.selector))) rests.set(e.selector, [...(rests.get(e.selector) ?? []), e]);
   const pinned = new Set();
   for (const entry of [...won.values()].sort((a, b) => a.order - b.order)) {
     const name = SHADOW_NAMES[entry.state];
-    const below = !inLine(entry.selector) ? inLine : simples(lastCompound(entry.selector)).some((s) => ROW.test(s)) ? (selector) => simples(lastCompound(selector)).some((s) => WORDISH.test(s)) : null;
-    if (!below || authored.has(name)) continue;
-    for (const rest of stated.filter((e) => e.state === "rest" && below(e.selector))) {
-      const key = `${entry.state}\n${rest.selector}`;
-      if (pinned.has(key) || won.has(key)) continue;
+    const row = textOf(entry.selector).find((s) => ROW.test(s));
+    // Words and runs have nothing below them; a row, its words and runs only.
+    if ((textOf(entry.selector).length > 0 && !row) || authored.has(name)) continue;
+    for (const [selector, list] of rests) {
+      const text = textOf(selector);
+      if (row) {
+        const above = compounds(selector).slice(0, -1).flatMap((part) => simples(part.compound));
+        // Words named without a row are the main row's.
+        const inside = above.includes(row) || (row === ".blyrics-line-main" && !above.some((s) => ROW.test(s)));
+        if (!text.some((s) => WORDISH.test(s)) || !inside) continue;
+      }
+      // A state shadow the theme gives that text itself is written already.
+      const key = `${entry.state}\n${selector}`;
+      if (pinned.has(key) || [...won.values()].some((w) => w.state === entry.state && textOf(w.selector).some((s) => text.includes(s)))) continue;
       pinned.add(key);
-      out.push({ selector: rest.selector, declarations: [`${name}: ${rest.raw}${rest.important ? " !important" : ""};`] });
+      const rest = winner(list);
+      out.push({ selector, declarations: [`${name}: ${rest.raw}${rest.important ? " !important" : ""};`] });
     }
   }
   return out;
@@ -1381,13 +1394,17 @@ function borderParts(raw, customs) {
 
 /**
  * The border or outline a line draws at rest that a hover colour longhand colours: the weightiest
- * `shorthand` of the rest boxes, when it has a visible style and a width. Its width, to write.
+ * `shorthand` of the rest boxes, when it has a visible style and a width. Its width, to write;
+ * { solid: false } when it is not solid, { scoped: true } when only some lines have it.
  */
-function restBorder(boxes, shorthand, customs) {
+function restBorder(boxes, shorthand, customs, sync) {
   const set = boxes.filter((b) => b.property === shorthand);
   const won = set.length ? winner(set) : null;
   const parts = won && borderParts(won.raw, customs);
   if (!parts || parts.style === "none" || parts.style === "hidden" || /^0(?:\.0+)?[a-z]*$/.test(parts.width.value)) return null;
+  if (parts.style !== "solid") return { solid: false };
+  const role = lineRole(won.original, sync);
+  if (/\[/.test(won.original) || !role || role.scoped) return { scoped: true };
   return { entry: won, width: /^var\(/.test(parts.width.raw) ? parts.width.raw : parts.width.value };
 }
 
@@ -1508,9 +1525,17 @@ function hoverBoxes(rules, customs, sync, { found: boxes, groups }, authored, re
         } else if (/^(?:border|outline)-color$/.test(property) && value && typeof value === "object") {
           // A colour longhand colours the border the line has at rest, as wide as that one.
           const shorthand = property.slice(0, -"-color".length);
-          const rest = restBorder(boxes, shorthand, customs);
+          const rest = restBorder(boxes, shorthand, customs, sync);
           if (!rest) {
-            review(`\`${property}\` on the hovered line colours a ${shorthand} the line does not draw at rest, so ${HOVER_BOX_NAMES[kind]} was not written for it; set it by hand if the hovered line should get one.`, original);
+            review(`\`${property}\` on the hovered line colours ${shorthand === "outline" ? "an" : "a"} ${shorthand} the line does not draw at rest, so ${HOVER_BOX_NAMES[kind]} was not written for it; set it by hand if the hovered line should get one.`, original);
+            continue;
+          }
+          if (rest.solid === false) {
+            review(ONLY_SOLID, original);
+            continue;
+          }
+          if (rest.scoped) {
+            review(`\`${property}\` on the hovered line colours a ${shorthand} only some lines draw at rest, and ${HOVER_BOX_NAMES[kind]} applies to whichever line is hovered, so it was not written; set it by hand.`, original);
             continue;
           }
           writeWidth(groups, rest, authored);
@@ -1574,8 +1599,7 @@ function pseudoVariables(rules, review) {
   let reviewed = false;
   // What the theme sets on the word itself, which a copy from its `::after` would override.
   const onWord = new Set();
-  for (const { selector, conditional, declarations } of rules) {
-    if (conditional) continue;
+  for (const { selector, declarations } of rules) {
     const word = splitTopLevel(selector, ",").some((one) => {
       const own = simples(lastCompound(one.trim()));
       return own.some((s) => s === ".blyrics--word" || s === ".blyrics-line-synced-word") && !own.some((s) => PSEUDO.test(s) || s.startsWith("::")) && !isStateful(one.trim());

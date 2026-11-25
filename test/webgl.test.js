@@ -711,11 +711,45 @@ test("a hover border colour needs the border the line draws at rest, and keeps i
   }
 });
 
-test("a ::after variable left on the word's own settles the old note, and only rules for every screen and state count", () => {
+test("a ::after variable left on the word's own settles the old note, and only rules for every state count", () => {
   const { flags, settles } = migrate(`.blyrics--word { --blyrics-glow-color: transparent } .blyrics--word::after { --blyrics-glow-color: white }`);
   assert.deepEqual(settles, ["var-on-pseudo"]);
   assert.equal(flags.length, 1);
-  const { rules } = migrate(`@media (max-width: 600px) { .blyrics--word { --blyrics-glow-color: red } } .blyrics--line.blyrics--active .blyrics--word { --blyrics-glow-color: blue }
-    .blyrics--word::after { --blyrics-glow-color: white }`);
+  const { rules } = migrate(`.blyrics--line.blyrics--active .blyrics--word { --blyrics-glow-color: blue } .blyrics--word::after { --blyrics-glow-color: white }`);
   assert.deepEqual(rules[".blyrics--word"], { "--blyrics-glow-color": "white" });
+});
+
+test("text whose state shadow the theme sets itself is not pinned over it", () => {
+  const { rules } = migrate(`.blyrics-container .blyrics--word { text-shadow: 0 0 2px black }
+    .blyrics--line.blyrics--active { text-shadow: 0 0 10px white }
+    .blyrics--line.blyrics--active .blyrics--word { text-shadow: 0 0 6px red }`);
+  assert.deepEqual(rules[".blyrics--line .blyrics--word"], { "--blyrics-active-text-shadow": "0 0 6px red" });
+  assert.deepEqual(rules[".blyrics-container .blyrics--word"], { "--blyrics-text-shadow": "0 0 2px black" });
+});
+
+test("a pinned shadow is the one the cascade gives the text", () => {
+  const { rules } = migrate(`.blyrics--word { text-shadow: 0 0 2px black } .blyrics--word { text-shadow: 0 0 2px blue } .blyrics--line.blyrics--active { text-shadow: 0 0 10px white }`);
+  assert.equal(rules[".blyrics--word"]["--blyrics-active-text-shadow"], "0 0 2px blue");
+});
+
+test("a row's state shadow pins only the text inside that row", () => {
+  const { rules } = migrate(`.blyrics--word { text-shadow: 0 0 2px black } .blyrics--translated .blyrics--word { text-shadow: 0 0 2px gray }
+    .blyrics--line:hover .blyrics--translated { text-shadow: 0 0 4px gold }`);
+  assert.equal(rules[".blyrics--word"]["--blyrics-line-hover-text-shadow"], undefined);
+  assert.equal(rules[".blyrics--translated .blyrics--word"]["--blyrics-line-hover-text-shadow"], "0 0 2px gray");
+});
+
+test("a hover colour on a rest border that is not solid, or only some lines have, is left to the author", () => {
+  for (const [rest, note] of [[".blyrics--line { border: 2px dashed transparent }", "Only a solid colour"], ['.blyrics--line[data-agent="v2"] { border: 2px solid transparent }', "only some lines draw at rest"]]) {
+    const { written, flags } = migrate(`${rest} ${LINE}:hover { border-color: red }`);
+    assert.equal(written["hover-border-color"], undefined, rest);
+    assert.ok(flags.some((flag) => flag.message.includes(note)), rest);
+  }
+  assert.ok(migrate(`${LINE}:hover { outline-color: red }`).flags.some((flag) => flag.message.includes("colours an outline the line")));
+});
+
+test("a ::after variable is not copied over the word's own on some screens", () => {
+  const { output, flags } = migrate(`@media (max-width: 600px) { .blyrics--word { --blyrics-glow-color: red } } .blyrics--word::after { --blyrics-glow-color: white }`);
+  assert.doesNotMatch(output, /WebGL renderer \(begin\)/);
+  assert.ok(flags.some((flag) => flag.message.startsWith("The theme sets --blyrics-glow-color on the word itself too")));
 });
