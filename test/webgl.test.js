@@ -689,8 +689,33 @@ test("a border coloured only on hover becomes the hover border, and other hovere
   assert.deepEqual(migrate(`.blyrics-container:hover > .blyrics--line:not(:hover) { outline-color: red }`).unsupported.map((u) => u.code), ["hover"]);
 });
 
-test("a sung line's shadow is not written over the shadow its words keep", () => {
-  const { output, flags } = migrate(`.blyrics--word { text-shadow: 0 0 2px black } .blyrics--line.blyrics--active { text-shadow: 0 0 10px white }`);
-  assert.doesNotMatch(output, /--blyrics-active-text-shadow/);
-  assert.ok(flags.some((flag) => flag.message.startsWith("`.blyrics--word` has a text shadow of its own")));
+test("text with a shadow of its own keeps it while its line is sung or hovered", () => {
+  const { rules, flags } = migrate(`.blyrics--word { text-shadow: 0 0 2px black } .blyrics--translated { text-shadow: none }
+    .blyrics--line.blyrics--active { text-shadow: 0 0 10px white } .blyrics--line:hover .blyrics-line-main { text-shadow: 0 0 4px gold }`);
+  assert.deepEqual(rules[".blyrics--line"], { "--blyrics-active-text-shadow": "0 0 10px white" });
+  assert.deepEqual(rules[".blyrics--line .blyrics-line-main"], { "--blyrics-line-hover-text-shadow": "0 0 4px gold" });
+  assert.deepEqual(rules[".blyrics--word"], { "--blyrics-text-shadow": "0 0 2px black", "--blyrics-active-text-shadow": "0 0 2px black", "--blyrics-line-hover-text-shadow": "0 0 2px black" });
+  // The hover shadow is on .blyrics-line-main, which the translation is not inside.
+  assert.deepEqual(rules[".blyrics--translated"], { "--blyrics-text-shadow": "none", "--blyrics-active-text-shadow": "none" });
+  assert.deepEqual(flags, []);
+});
+
+test("a hover border colour needs the border the line draws at rest, and keeps its width", () => {
+  const { written, rules } = migrate(`.blyrics--line { border: 3px solid transparent } ${LINE}:hover { border-color: red }`);
+  assert.deepEqual(written, { "hover-border-color": "red" });
+  assert.deepEqual(rules[".blyrics--line"], { "--blyrics-line-border-width": "3px" });
+  for (const rest of ["", ".blyrics--line { border: 0 }", ".blyrics--line { outline: 2px solid transparent }"]) {
+    const { written: none, flags } = migrate(`${rest} ${LINE}:hover { border-color: red }`);
+    assert.equal(none["hover-border-color"], undefined, rest);
+    assert.ok(flags.some((flag) => flag.message.includes("colours a border the line does not draw at rest")), rest);
+  }
+});
+
+test("a ::after variable left on the word's own settles the old note, and only rules for every screen and state count", () => {
+  const { flags, settles } = migrate(`.blyrics--word { --blyrics-glow-color: transparent } .blyrics--word::after { --blyrics-glow-color: white }`);
+  assert.deepEqual(settles, ["var-on-pseudo"]);
+  assert.equal(flags.length, 1);
+  const { rules } = migrate(`@media (max-width: 600px) { .blyrics--word { --blyrics-glow-color: red } } .blyrics--line.blyrics--active .blyrics--word { --blyrics-glow-color: blue }
+    .blyrics--word::after { --blyrics-glow-color: white }`);
+  assert.deepEqual(rules[".blyrics--word"], { "--blyrics-glow-color": "white" });
 });

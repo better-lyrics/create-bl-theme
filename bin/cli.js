@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 import { imageSize } from "image-size";
 import { execSync, spawn } from "child_process";
 import { compileWithDetails } from "rics";
-import { DISCORD_URL, hasBlock, migrateForWebgl, withoutBlock } from "./webgl.js";
+import { DISCORD_URL, migrateForWebgl, withoutBlock } from "./webgl.js";
 import { perfReport } from "./perf.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1212,10 +1212,12 @@ function perf(target, { json } = {}) {
     process.exit(1);
   }
   const report = perfReport(css);
+  // What migrate would still write: until then the report sees the variables only, not the rules.
+  const migrated = migrateForWebgl(source, compiledStyle(stylePath, withoutBlock(source)).css).output === source;
   const rel = path.relative(process.cwd(), stylePath);
   const shown = rel && !rel.startsWith("..") ? rel : stylePath;
   if (json) {
-    console.log(JSON.stringify({ file: shown, migrated: hasBlock(source), ...report }, null, 2));
+    console.log(JSON.stringify({ file: shown, migrated, ...report }, null, 2));
     return;
   }
 
@@ -1223,8 +1225,8 @@ function perf(target, { json } = {}) {
   const label = (cost) => paint[cost](pc.bold(cost.toUpperCase().padEnd(6)));
   console.log(pc.bold(`  What ${pc.cyan(shown)} costs in the WebGL renderer`));
   console.log();
-  if (!hasBlock(source)) {
-    console.log(pc.yellow(`  This theme has not been migrated, so this covers only the renderer's variables it sets, not what its rules do. Run ${pc.cyan("migrate --write")} first.`));
+  if (!migrated) {
+    console.log(pc.yellow(`  migrate would still change this theme; run ${pc.cyan("migrate --write")} first, since this report reads only the renderer's variables.`));
     console.log();
   }
   for (const feature of report.features) {

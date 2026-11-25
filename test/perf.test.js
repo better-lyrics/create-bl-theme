@@ -91,10 +91,10 @@ test("an unmigrated theme is said to be one", () => {
     const run = (...args) => spawnSync(process.execPath, [CLI, "perf", file, ...args], { encoding: "utf8" }).stdout;
     fs.writeFileSync(file, ".blyrics--line:not(.blyrics--active) { filter: blur(2px) }\n");
     assert.equal(JSON.parse(run("--json")).migrated, false);
-    assert.match(run(), /has not been migrated/);
+    assert.match(run(), /migrate would still change this theme/);
     spawnSync(process.execPath, [CLI, "migrate", file, "--write"], { encoding: "utf8" });
     assert.equal(JSON.parse(run("--json")).migrated, true);
-    assert.doesNotMatch(run(), /has not been migrated/);
+    assert.doesNotMatch(run(), /migrate would still change this theme/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -112,4 +112,31 @@ test("distance lists are rated as the container reads them", () => {
   assert.ok(!ids(".blyrics--word:hover { --blyrics-line-blur: 0 4px }").includes("line-blur"));
   assert.deepEqual(source('.blyrics-container[data-sync="synced"] { --blyrics-line-blur-after: 0 2px }', "line-blur"), ['`--blyrics-line-blur-after: 0 2px` on `.blyrics-container[data-sync="synced"]`']);
   assert.ok(!ids(".blyrics--line { --blyrics-line-opacity: 1 0.5 }").includes("line-opacity"));
+});
+
+test("a theme migrate would not change counts as migrated, with no block", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "create-bl-theme-"));
+  try {
+    const file = path.join(dir, "style.css");
+    fs.writeFileSync(file, ".blyrics-container { --blyrics-font-size: 2rem }\n");
+    const run = (...args) => spawnSync(process.execPath, [CLI, "perf", file, ...args], { encoding: "utf8" }).stdout;
+    assert.equal(JSON.parse(run("--json")).migrated, true);
+    assert.doesNotMatch(run(), /migrate would still change this theme/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a distance list on the container inside a media query is reported with its query", () => {
+  assert.deepEqual(source("@media (min-width: 800px) { .blyrics-container { --blyrics-line-blur-after: 0 3px } }", "line-blur"), ["`--blyrics-line-blur-after: 0 3px` on `.blyrics-container` (in `@media (min-width: 800px)`)"]);
+  assert.ok(ids("@media (min-width: 800px) { .blyrics-container { --blyrics-animate-highlight-glow: 0 } }").includes("glow-every-word"));
+});
+
+test("distance lists are parsed as the renderer parses them", () => {
+  assert.ok(!ids(".blyrics-container { --blyrics-line-blur: 0, 0 }").includes("line-blur"));
+  assert.deepEqual(source(".blyrics-container { --blyrics-line-blur: 0 2px; --blyrics-line-blur-after: none }", "line-blur"), ["`--blyrics-line-blur: 0 2px` on `.blyrics-container`"]);
+});
+
+test("a container that holds for every song with lyrics reads the lists", () => {
+  assert.ok(ids('.blyrics-container:not([data-no-lyrics="true"]) { --blyrics-line-blur: 0 2px }').includes("line-blur"));
 });

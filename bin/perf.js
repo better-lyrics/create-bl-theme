@@ -24,7 +24,7 @@ function onContainer(selector, sync) {
     const own = simples(parts[parts.length - 1].compound);
     const found = own.every((s) => ANCESTOR.test(s))
       ? { near: 1, specificity: [0, 0, 0] }
-      : own.every((s) => /^(?:\*|div|\.blyrics-container)$/.test(s) || (sync && SYNC.exec(s)?.[1] === sync))
+      : own.every((s) => /^(?:\*|div|\.blyrics-container|:not\(\[data-no-lyrics[^\]]*\]\))$/.test(s) || (sync && SYNC.exec(s)?.[1] === sync))
         ? { near: 2, specificity: specificity(one) }
         : null;
     if (found && (!best || found.near > best.near || compareSpecificity(found.specificity, best.specificity) > 0)) best = found;
@@ -56,6 +56,7 @@ function readTheme(css) {
   return {
     declared: (name) => declarations.filter(matches(name)),
     winning,
+    conditional: (name, sync) => declarations.filter((d) => d.name === name && d.conditional && onContainer(d.selector, sync)),
     value: (name) => winning(name)?.value,
     setting: (key) => settings.get(key),
     where: (d) => `\`${d.name}: ${d.value.replace(/\s+/g, " ")}\` on \`${d.selector}\`${d.conditional ? ` (in \`${d.conditions.join(" ")}\`)` : ""}`,

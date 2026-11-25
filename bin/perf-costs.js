@@ -16,6 +16,7 @@
 //   theme.declared(name | regexp)  every declaration of a custom property, but on ::before / ::after
 //   theme.winning(name, sync)      the declaration the container ends up with in every song (of
 //                                  that sync type, when given), outside media queries, or undefined
+//   theme.conditional(name, sync)  the declarations on the container inside media queries and the like
 //   theme.value(name)              the value of theme.winning(name), or undefined
 //   theme.setting(key)             a comment setting (`blyrics-key = value;`), or undefined
 //   theme.where(declaration)       "`--name: value` on `selector`"
@@ -33,18 +34,34 @@ function changed(theme, names, neutral) {
   return theme.declared(names).filter((d) => d.value.split(/\s+/).some((v) => !neutral.test(v))).map(theme.where);
 }
 
+/** A distance list as the renderer parses it: numbers, px or rem, up to the first it cannot read. */
+function parseList(value) {
+  const out = [];
+  for (const token of value.split(/[\s,]+/).filter(Boolean)) {
+    const m = /^(-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?)(?:px|rem)?$/i.exec(token);
+    if (!m) break;
+    out.push(Number(m[1]));
+  }
+  return out;
+}
+
 /**
  * The declarations that give a line distance list (`--blyrics-line-blur`, say) a value other than
- * `neutral` on either side, as the container reads it: `-before` / `-after` where set, else the
- * list for both sides. Null when every list leaves lines as they are.
+ * `neutral` on either side, as the container reads it: `-before` / `-after` where it has a value,
+ * else the list for both sides; and those that do on some screens. Null when none do.
  */
 function distanceLists(theme, bases, neutral) {
   const found = new Set();
+  const changes = (d) => parseList(d.value).some((v) => v !== neutral);
   for (const base of bases) {
     for (const sync of ["richsync", "synced"]) {
       for (const side of ["-before", "-after"]) {
-        const d = theme.winning(`${base}${side}`, sync) ?? theme.winning(base, sync);
-        if (d && d.value.split(/\s+/).some((v) => !neutral.test(v))) found.add(theme.where(d));
+        const own = theme.winning(`${base}${side}`, sync);
+        const d = own && parseList(own.value).length > 0 ? own : theme.winning(base, sync);
+        if (d && changes(d)) found.add(theme.where(d));
+      }
+      for (const name of [base, `${base}-before`, `${base}-after`]) {
+        for (const d of theme.conditional(name, sync)) if (changes(d)) found.add(theme.where(d));
       }
     }
   }
@@ -134,7 +151,7 @@ export const FEATURES = [
     cost: "high", // +0.43 ms, about 1 ms at the 95th percentile
     reason: "each blurred line is drawn again and blurred on the GPU every frame, and lines are large",
     tip: "Blur fewer lines (end the list early with its last value, or 0), or fade them with `--blyrics-line-opacity-*` instead.",
-    detect: (theme) => distanceLists(theme, ["--blyrics-line-blur"], ZERO),
+    detect: (theme) => distanceLists(theme, ["--blyrics-line-blur"], 0),
   },
   {
     id: "hover-blur",
@@ -153,7 +170,7 @@ export const FEATURES = [
     cost: "low", // +0.00 ms
     reason: "applied to each line's colours as it is drawn",
     tip: null,
-    detect: (theme) => distanceLists(theme, ["--blyrics-line-saturate", "--blyrics-line-brightness"], /^(?:1|100%)$/),
+    detect: (theme) => distanceLists(theme, ["--blyrics-line-saturate", "--blyrics-line-brightness"], 1),
   },
   {
     id: "line-opacity",
@@ -161,7 +178,7 @@ export const FEATURES = [
     cost: "low", // +0.00 ms
     reason: "applied to each line as it is drawn",
     tip: null,
-    detect: (theme) => distanceLists(theme, ["--blyrics-line-opacity"], /^(?:1|100%)$/),
+    detect: (theme) => distanceLists(theme, ["--blyrics-line-opacity"], 1),
   },
   {
     id: "browsing-opacity",

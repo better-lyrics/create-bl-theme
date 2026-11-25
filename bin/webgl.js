@@ -105,11 +105,6 @@ const OTHER_FILTER = /\b(?:brightness|contrast|saturate|grayscale|sepia|hue-rota
 /** State the renderer applies itself, which variables cannot be scoped by. */
 const STATEFUL = /\.blyrics--(?:active|animating|paused)\b|\[data-word-state\b|:hover\b|:focus\b|:focus-within\b|\.blyrics-user-scrolling\b/;
 
-/** Whether `text` has the block an earlier run wrote. */
-export function hasBlock(text) {
-  return BLOCK.test(text);
-}
-
 /** `text` without the block an earlier run wrote, its lines kept. What is to be compiled and read. */
 export function withoutBlock(text) {
   return text.replace(BLOCK, (block) => block.replace(/[^\n]/g, " "));
@@ -145,7 +140,7 @@ export function migrateForWebgl(source, css) {
       ...distanceLists(candidates, authored, review),
       ...hoverValues(candidates, authored, review),
       ...hoverColor(rules, customs[sync], sync, authored, review, unsupported, cover),
-      ...hoverBoxes(rules, customs[sync], sync, boxes.found, authored, review, unsupported, cover),
+      ...hoverBoxes(rules, customs[sync], sync, boxes, authored, review, unsupported, cover),
       ...browsingValue(rules, customs[sync], sync, candidates, authored, review, cover),
       ...words.themeWide,
       ...instrumental,
@@ -1147,6 +1142,9 @@ const OVERLAY = /^\.blyrics-(?:highlight-run|word-highlight|sweep-text)$/;
 /** Text inside a line, which inherits a line's shadow variables. */
 const IN_LINE = /^\.blyrics(?:--(?:word|translated|romanized)|-(?:line-main|bidi-run|word-group|background-line|background-lyric|content-line|line-synced-word))$/;
 const inLine = (selector) => simples(lastCompound(selector)).some((s) => IN_LINE.test(s));
+/** The rows of a line, and the words and runs in them. */
+const ROW = /^\.blyrics(?:--(?:translated|romanized)|-(?:line-main|background-line|content-line))$/;
+const WORDISH = /^\.blyrics(?:--word|-(?:bidi-run|word-group|background-lyric|line-synced-word))$/;
 const SHADOW_NAMES = { rest: "--blyrics-text-shadow", active: "--blyrics-active-text-shadow", hover: "--blyrics-line-hover-text-shadow" };
 
 /**
@@ -1246,13 +1244,21 @@ function textShadows(rules, authored, review, unsupported, cover) {
       review(`The theme's text shadow at rest (\`${beaten.raw}\`) outweighs this one, so ${name} was not written; check which the line should take.`, entry.original);
       continue;
     }
-    // Text in the line with a shadow of its own keeps it in the DOM renderer, but would inherit this.
-    const kept = !inLine(entry.selector) && stated.find((e) => e.state === "rest" && inLine(e.selector));
-    if (kept) {
-      review(`\`${kept.original}\` has a text shadow of its own (\`${kept.raw}\`), which it keeps while the line is sung or hovered, but ${name} on the line would reach it too, so it was not written; set it on the line's text by hand.`, entry.original);
-      continue;
-    }
     out.push({ selector: entry.selector, declarations: [`${name}: ${entry.raw}${entry.important ? " !important" : ""};`] });
+  }
+  // Text inside a line or row with a shadow of its own keeps it in every state in the DOM renderer,
+  // but would inherit the line's state shadow: pin that text's state shadow to its own.
+  const pinned = new Set();
+  for (const entry of [...won.values()].sort((a, b) => a.order - b.order)) {
+    const name = SHADOW_NAMES[entry.state];
+    const below = !inLine(entry.selector) ? inLine : simples(lastCompound(entry.selector)).some((s) => ROW.test(s)) ? (selector) => simples(lastCompound(selector)).some((s) => WORDISH.test(s)) : null;
+    if (!below || authored.has(name)) continue;
+    for (const rest of stated.filter((e) => e.state === "rest" && below(e.selector))) {
+      const key = `${entry.state}\n${rest.selector}`;
+      if (pinned.has(key) || won.has(key)) continue;
+      pinned.add(key);
+      out.push({ selector: rest.selector, declarations: [`${name}: ${rest.raw}${rest.important ? " !important" : ""};`] });
+    }
   }
   return out;
 }
@@ -1342,6 +1348,18 @@ function boxValue(property, raw, customs) {
     if (/\bvar\(/.test(colour) || cssColor(colour) === null) return null;
     return colour.toLowerCase() === "transparent" ? "transparent" : { color: /^var\([^()]*\)$/.test(raw) ? raw : colour, width: null };
   }
+  const parts = borderParts(raw, customs);
+  if (!parts) return null;
+  const { style, width, color } = parts;
+  if (style === "none" || style === "hidden" || /^0(?:\.0+)?[a-z]*$/.test(width.value) || color?.value.toLowerCase() === "transparent") return "transparent";
+  if (style !== "solid") return undefined;
+  // No colour is currentColor, which is the element's own text colour.
+  if (!color) return null;
+  return { color: /^var\([^()]*\)$/.test(color.raw) ? color.raw : color.value, width: /^var\(/.test(width.raw) ? width.raw : width.value };
+}
+
+/** The style, width and colour tokens ({ raw, value }) of a border or outline shorthand, or null. */
+function borderParts(raw, customs) {
   const split = (text) => splitTopLevel(text, " ").map((t) => t.trim()).filter(Boolean);
   let tokens = split(raw).map((token) => ({ raw: token, value: resolve(token, customs) }));
   // A variable that stands for more than one part of the shorthand is read whole.
@@ -1358,11 +1376,19 @@ function boxValue(property, raw, customs) {
     else if (cssColor(token.value) !== null) color = token;
     else return null;
   }
-  if (style === "none" || style === "hidden" || /^0(?:\.0+)?[a-z]*$/.test(width.value) || color?.value.toLowerCase() === "transparent") return "transparent";
-  if (style !== "solid") return undefined;
-  // No colour is currentColor, which is the element's own text colour.
-  if (!color) return null;
-  return { color: /^var\([^()]*\)$/.test(color.raw) ? color.raw : color.value, width: /^var\(/.test(width.raw) ? width.raw : width.value };
+  return { style, width, color };
+}
+
+/**
+ * The border or outline a line draws at rest that a hover colour longhand colours: the weightiest
+ * `shorthand` of the rest boxes, when it has a visible style and a width. Its width, to write.
+ */
+function restBorder(boxes, shorthand, customs) {
+  const set = boxes.filter((b) => b.property === shorthand);
+  const won = set.length ? winner(set) : null;
+  const parts = won && borderParts(won.raw, customs);
+  if (!parts || parts.style === "none" || parts.style === "hidden" || /^0(?:\.0+)?[a-z]*$/.test(parts.width.value)) return null;
+  return { entry: won, width: /^var\(/.test(parts.width.raw) ? parts.width.raw : parts.width.value };
 }
 
 /** A value as every song the selector is for reads it, or null when they differ. */
@@ -1445,12 +1471,22 @@ function lineBoxes(rules, customs, authored, review, unsupported, cover) {
   return { groups, found };
 }
 
+/** `--blyrics-line-border-width` under the rest border's selector, when the line boxes lack it. */
+function writeWidth(groups, { entry, width }, authored) {
+  const name = "--blyrics-line-border-width";
+  if (authored.has(name)) return;
+  const declaration = `${name}: ${width}${entry.important ? " !important" : ""};`;
+  const group = groups.find((g) => g.selector === entry.selector);
+  if (!group) groups.push({ selector: entry.selector, declarations: [declaration] });
+  else if (!group.declarations.some((d) => d.startsWith(`${name}:`))) group.declarations.push(declaration);
+}
+
 /**
  * `--blyrics-line-hover-bg-color` and `--blyrics-line-hover-border-color`, from the box a
  * `.blyrics--line:hover` rule draws. They apply to whichever line is hovered, so they are written
  * when every line ends up the same, as the other hover values are.
  */
-function hoverBoxes(rules, customs, sync, boxes, authored, review, unsupported, cover) {
+function hoverBoxes(rules, customs, sync, { found: boxes, groups }, authored, review, unsupported, cover) {
   const candidates = { bg: [], border: [] };
   let order = 0;
   for (const { selector, conditional, declarations } of rules) {
@@ -1469,6 +1505,16 @@ function hoverBoxes(rules, customs, sync, boxes, authored, review, unsupported, 
           unsupported.push({ line: original, code: "line-box", message: ONLY_SOLID });
         } else if (conditional || roles.some((role) => role.scoped)) {
           review(`This box behind the hovered line applies to only some screens, views or lines, so ${HOVER_BOX_NAMES[kind]} was not written for it. Set it under a selector or media query of your own if it matters.`, original);
+        } else if (/^(?:border|outline)-color$/.test(property) && value && typeof value === "object") {
+          // A colour longhand colours the border the line has at rest, as wide as that one.
+          const shorthand = property.slice(0, -"-color".length);
+          const rest = restBorder(boxes, shorthand, customs);
+          if (!rest) {
+            review(`\`${property}\` on the hovered line colours a ${shorthand} the line does not draw at rest, so ${HOVER_BOX_NAMES[kind]} was not written for it; set it by hand if the hovered line should get one.`, original);
+            continue;
+          }
+          writeWidth(groups, rest, authored);
+          for (const role of roles) candidates[kind].push({ ...role, property, value: { ...value, width: rest.width }, raw, selector: original, important, specificity: specificity(original), order });
         } else {
           for (const role of roles) candidates[kind].push({ ...role, property, value, raw, selector: original, important, specificity: specificity(original), order });
         }
@@ -1509,7 +1555,7 @@ function hoverBoxes(rules, customs, sync, boxes, authored, review, unsupported, 
       if (boxes.some((b) => b.kind === kind && b.value && typeof b.value === "object")) out.push(`${name}: transparent;`);
       continue;
     }
-    if (value.width && value.width !== "1px") {
+    if (value.width && value.width !== "1px" && !/-color$/.test(hover.property)) {
       review(`The hovered line's ${hover.property} is ${value.width} wide. The WebGL renderer draws it as wide as the line's own border, \`--blyrics-line-border-width\` (1px unless set); check it.`, first);
     }
     out.push(`${name}: ${value.color};`);
@@ -1525,12 +1571,14 @@ function hoverBoxes(rules, customs, sync, boxes, authored, review, unsupported, 
 function pseudoVariables(rules, review) {
   const groups = [];
   let skipped = false;
+  let reviewed = false;
   // What the theme sets on the word itself, which a copy from its `::after` would override.
   const onWord = new Set();
-  for (const { selector, declarations } of rules) {
+  for (const { selector, conditional, declarations } of rules) {
+    if (conditional) continue;
     const word = splitTopLevel(selector, ",").some((one) => {
       const own = simples(lastCompound(one.trim()));
-      return own.some((s) => s === ".blyrics--word" || s === ".blyrics-line-synced-word") && !own.some((s) => PSEUDO.test(s) || s.startsWith("::"));
+      return own.some((s) => s === ".blyrics--word" || s === ".blyrics-line-synced-word") && !own.some((s) => PSEUDO.test(s) || s.startsWith("::")) && !isStateful(one.trim());
     });
     if (word) for (const [name] of declarations) onWord.add(name);
   }
@@ -1549,13 +1597,14 @@ function pseudoVariables(rules, review) {
       }
       const copied = variables.filter(([name]) => !onWord.has(name));
       if (copied.length < variables.length) {
-        skipped = true;
+        reviewed = true;
         review(`The theme sets ${variables.filter(([name]) => onWord.has(name)).map(([name]) => name).join(", ")} on the word itself too, so the word's \`::after\` value was not copied onto the word, where it would replace the word's own on both renderers. Check which the word should take.`, original);
       }
       if (copied.length) groups.push({ selector: plainSelector(withoutRestingState(target)), declarations: copied.map(([name, value, important]) => `${name}: ${value}${important ? " !important" : ""};`) });
     }
   }
-  return { groups, settles: groups.length > 0 && !skipped ? ["var-on-pseudo"] : [] };
+  // The old engine's note says to set them on the word, which a review above already weighs.
+  return { groups, settles: (groups.length > 0 || reviewed) && !skipped ? ["var-on-pseudo"] : [] };
 }
 
 // -- The instrumental icon and the no-lyrics message ----------------------
