@@ -1265,9 +1265,11 @@ function textShadows(rules, authored, review, unsupported, cover) {
         const inside = above.includes(row) || (row === ".blyrics-line-main" && !above.some((s) => ROW.test(s)));
         if (!text.some((s) => WORDISH.test(s)) || !inside) continue;
       }
-      // A state shadow the theme gives that text itself is written already.
+      // A state shadow the theme gives that text itself is written already, and the pin would beat
+      // it unless it is more specific, so wins wherever it applies.
       const key = `${entry.state}\n${selector}`;
-      if (pinned.has(key) || [...won.values()].some((w) => w.state === entry.state && textOf(w.selector).some((s) => text.includes(s)))) continue;
+      const own = (w) => w.state === entry.state && textOf(w.selector).some((s) => text.includes(s)) && compareSpecificity(specificity(w.selector), specificity(selector)) <= 0;
+      if (pinned.has(key) || [...won.values()].some(own)) continue;
       pinned.add(key);
       const rest = winner(list);
       out.push({ selector, declarations: [`${name}: ${rest.raw}${rest.important ? " !important" : ""};`] });
@@ -1404,7 +1406,7 @@ function restBorder(boxes, shorthand, customs, sync) {
   if (!parts || parts.style === "none" || parts.style === "hidden" || /^0(?:\.0+)?[a-z]*$/.test(parts.width.value)) return null;
   if (parts.style !== "solid") return { solid: false };
   const role = lineRole(won.original, sync);
-  if (/\[/.test(won.original) || !role || role.scoped) return { scoped: true };
+  if (!role || role.scoped) return { scoped: true };
   return { entry: won, width: /^var\(/.test(parts.width.raw) ? parts.width.raw : parts.width.value };
 }
 

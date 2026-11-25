@@ -753,3 +753,20 @@ test("a ::after variable is not copied over the word's own on some screens", () 
   assert.doesNotMatch(output, /WebGL renderer \(begin\)/);
   assert.ok(flags.some((flag) => flag.message.startsWith("The theme sets --blyrics-glow-color on the word itself too")));
 });
+
+test("a hover border colour maps onto a rest border under the container's guards", () => {
+  for (const container of ['.blyrics-container:not([data-no-lyrics="true"])', '.blyrics-container[data-sync="richsync"]']) {
+    const { rules, flags } = migrate(`${container} > .blyrics--line { border: 2px solid transparent } ${container} > .blyrics--line:hover { border-color: red }`);
+    const written = Object.values(rules).find((r) => r["--blyrics-line-hover-border-color"]);
+    assert.equal(written?.["--blyrics-line-hover-border-color"], "red", container);
+    assert.deepEqual(rules[`${container} > .blyrics--line`], { "--blyrics-line-border-width": "2px" }, container);
+    assert.deepEqual(flags, [], container);
+  }
+});
+
+test("text keeps its pin where a more specific state shadow does not reach it", () => {
+  const { rules } = migrate(`.blyrics--word { text-shadow: 0 0 2px black } .blyrics--line.blyrics--active { text-shadow: 0 0 10px white }
+    .blyrics--line[data-agent="v2"].blyrics--active .blyrics--word { text-shadow: 0 0 6px red }`);
+  assert.equal(rules[".blyrics--word"]["--blyrics-active-text-shadow"], "0 0 2px black");
+  assert.deepEqual(rules['.blyrics--line[data-agent="v2"] .blyrics--word'], { "--blyrics-active-text-shadow": "0 0 6px red" });
+});
