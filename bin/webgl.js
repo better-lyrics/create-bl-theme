@@ -1853,7 +1853,7 @@ const NOT_HELD = /^:not\(\[data-long-word(?:=["']?true["']?)?\]\)$/;
 const LETTER_COUNT = /^@container\s+style\(\s*--letters\s*:\s*\d+\s*\)(?:\s+or\s+style\(\s*--letters\s*:\s*\d+\s*\))*$/i;
 
 /** The comment settings (`blyrics-key = value;` inside a comment) a stylesheet declares, last one winning. */
-function commentSettings(css) {
+export function commentSettings(css) {
   const out = new Map();
   for (const [, comment] of css.matchAll(/\/\*([\s\S]*?)\*\//g)) {
     for (const [, key, value] of comment.matchAll(/(blyrics-[\w-]+)\s*=\s*([^;]+);/g)) out.set(key, value.trim());

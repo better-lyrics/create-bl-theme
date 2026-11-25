@@ -95,6 +95,15 @@ npx create-bl-theme@beta migrate --write
 
 The mapping is in [skills/MIGRATION.md](skills/MIGRATION.md), which `create-bl-theme skill` also installs for your AI assistant.
 
+### See what a theme costs in the WebGL renderer
+
+```bash
+npx create-bl-theme@beta perf ./my-theme
+npx create-bl-theme@beta perf ./my-theme --json
+```
+
+It reads `style.rics` (compiled) or `style.css`, including the block `migrate` writes, and lists the WebGL renderer's features the theme turns on, dearest first: what turned each on (a variable and its selector, a comment setting, or the renderer's default), whether it costs little, some or a lot and why, and a cheaper way to get it where there is one, such as `/* blyrics-letter-wave = long; */` in place of waving every word. It ends with an overall rating, the dearest feature's. Some features are on unless a theme turns them off: the glow on every word, the letter wave and the word wobble. The costs are estimates for now, to be replaced by measured ones.
+
 ### Install the theme skill for your AI assistant
 
 If you build themes with an AI coding assistant, install a Better Lyrics skill so it knows the selectors, CSS variables, DOM structure, and how to migrate old themes.
