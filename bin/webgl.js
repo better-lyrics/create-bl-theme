@@ -180,6 +180,7 @@ export function migrateForWebgl(source, css) {
     const lineFilter = property === "filter" && /\b(?:contrast|grayscale|sepia|hue-rotate|invert|drop-shadow)\s*\(/.test(value);
 
     if (compounds(selector).some((part) => isHovered(part.compound)) && /^(?:opacity|filter|transform|scale|color|background|text-shadow)/.test(property)) {
+      if (/^background/.test(property) && (drawsNothing(value) || backgroundFill(property, value) === "transparent")) return;
       const line_ = expandIs(selector).map(hoveredLine).find(Boolean);
       if (!line_) {
         unsupported.push({ line, code: "hover", message: "Hover effects other than on the hovered line itself and the opacity of the other lines (for example blurring the other lines while the mouse is over the lyrics) do not show in the WebGL renderer." });
@@ -225,7 +226,7 @@ export function migrateForWebgl(source, css) {
       case "background":
       case "background-color":
         // What draws nothing is not lost.
-        if (backgroundFill(property, value) === "transparent") return;
+        if (drawsNothing(value) || backgroundFill(property, value) === "transparent") return;
         unsupported.push({
           line,
           code: "paint",
@@ -244,6 +245,7 @@ export function migrateForWebgl(source, css) {
       case "background-image":
       case "background-clip":
       case "mix-blend-mode":
+        if (drawsNothing(value)) return;
         unsupported.push({ line, code: "paint", message: `\`${property}\` on lyric elements is not drawn by the WebGL renderer (it paints text, its shadow, the glow and image highlights only).` });
         return;
       case "text-shadow":
@@ -1768,6 +1770,20 @@ function calcValue(expression) {
 function cssColor(value) {
   if (/^(?:inherit|initial|unset|revert|revert-layer|currentcolor|none|auto)$/i.test(value) || /\bvar\(/.test(value)) return null;
   return /^(?:#[\da-f]{3,8}|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix|light-dark)\(.*\)|[a-z]+)$/i.test(value) ? value : null;
+}
+
+const NO_PAINT = /^(?:none|hidden|normal|initial|unset|revert|revert-layer|transparent|-?0(?:\.0+)?(?:[a-z]+|%)?)$/i;
+
+/**
+ * Whether a paint value draws nothing: `none`, `0` with or without a unit, the CSS-wide keywords,
+ * `transparent`, or a border, outline or stroke of no width, no style or no colour.
+ */
+function drawsNothing(value) {
+  const tokens = splitTopLevel(value.replace(/\s*!\s*important$/i, ""), " ").map((t) => t.trim()).filter(Boolean);
+  if (tokens.length === 1) return NO_PAINT.test(tokens[0]);
+  // Shadows have lengths of 0 too; a border, outline or stroke is no more than width, style and colour.
+  if (tokens.length > 3 || tokens.some((t) => t.includes(",")) || /^(?:inset|-?(?:\d|\.\d))/.test(tokens[1] ?? "")) return false;
+  return tokens.some((t) => /^(?:none|hidden|transparent)$/i.test(t) || /^-?0(?:\.0+)?(?:[a-z]+|%)?$/i.test(t));
 }
 
 /** Background keywords that are no colour. */

@@ -269,6 +269,16 @@ test("a static text shadow is drawn, one that changes with state is not", () => 
   assert.deepEqual(unsupported.map((u) => u.code), ["state-shadow"]);
 });
 
+test("paint that draws nothing is not reported", () => {
+  for (const declaration of ["border: 0", "border: none !important", "border: 0px solid red", "border: 2px solid transparent", "border: revert", "outline: none", "outline: initial", "outline: unset", "box-shadow: none", "-webkit-text-stroke: 0 transparent", "-webkit-text-stroke-width: 0px", "mix-blend-mode: normal", "background-image: none"]) {
+    const { unsupported } = migrate(`.blyrics--romanized, .blyrics--translated, ${LINE}:hover .blyrics--word { ${declaration} }`);
+    assert.deepEqual(unsupported, [], declaration);
+  }
+  for (const declaration of ["border: 1px solid red", "box-shadow: 0 0 4px red", "-webkit-text-stroke: 1px red"]) {
+    assert.equal(migrate(`.blyrics--romanized { ${declaration} }`).unsupported.length, 1, declaration);
+  }
+});
+
 test("variables on the word's ::after move onto the word", () => {
   const css = `.blyrics--word::after { --blyrics-glow-color: transparent; animation: none } .blyrics--word[data-long-word]::after { --blyrics-glow-color: white }
     .blyrics--word.blyrics-line-synced-word::after { animation: none !important }`;
