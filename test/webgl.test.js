@@ -275,7 +275,7 @@ test("the sung line's and the hovered line's shadows become state shadows", () =
     ${LINE}:hover { text-shadow: 0 0 6px gold } ${LINE}:hover > span > .blyrics--word { text-shadow: 0 0 2px gold }`;
   const { rules, unsupported, flags } = migrate(css);
   assert.deepEqual(rules[LINE], { "--blyrics-text-shadow": "none", "--blyrics-active-text-shadow": "0 0 8px white !important", "--blyrics-line-hover-text-shadow": "0 0 6px gold" });
-  assert.deepEqual(rules[`${LINE} .blyrics-line-main`], { "--blyrics-active-text-shadow": "0 2px 4px black" });
+  assert.deepEqual(rules['.blyrics-container:not([data-no-lyrics="true"]) > .blyrics--line .blyrics-line-main'], { "--blyrics-active-text-shadow": "0 2px 4px black" });
   assert.deepEqual(rules[`${LINE} .blyrics--word`], { "--blyrics-line-hover-text-shadow": "0 0 2px gold" });
   assert.deepEqual([unsupported, flags], [[], []]);
 });
@@ -313,7 +313,7 @@ test("a line's solid background and outline become the box behind it", () => {
     ${stage}, .blyrics-container[data-layout="stage"] > .blyrics-credits { background: var(--plate); border-radius: .46em; outline: 1px solid var(--edge); outline-offset: -1px }
     .blyrics--line[data-agent="v2"] { background-color: #2228; border: 2px solid #fff3 !important }`;
   const { rules, unsupported, flags } = migrate(css);
-  assert.deepEqual(rules[stage], { "--blyrics-line-bg-color": "var(--plate)", "--blyrics-line-border-color": "var(--edge)" });
+  assert.deepEqual(rules[stage], { "--blyrics-line-bg-color": "var(--plate)", "--blyrics-line-border-color": "var(--edge)", "--blyrics-line-border-width": "1px" });
   assert.deepEqual(rules['.blyrics--line[data-agent="v2"]'], { "--blyrics-line-bg-color": "#2228", "--blyrics-line-border-color": "#fff3 !important", "--blyrics-line-border-width": "2px !important" });
   assert.deepEqual([unsupported, flags], [[], []]);
 });
@@ -639,4 +639,58 @@ test("a linear() easing on the words' rise carries over", () => {
   const css = `.blyrics--word { transform: translateY(3px); transition: transform calc(var(--blyrics-duration) + 200ms) linear(0, 0.6 20%, 1.1 60%, 1) }
     .blyrics--word.blyrics--animating { transform: none }`;
   assert.deepEqual(migrate(css).rules[".blyrics-container"], { "--blyrics-word-rise-easing": "linear(0, 0.6 20%, 1.1 60%, 1)" });
+});
+
+test("a background colour with commas is one layer, not several", () => {
+  const { rules, flags } = migrate(`:root { --plate: rgba(0,0,0,.5) } ${LINE} { background: rgba(255,255,255,.1) } .blyrics--line[data-agent="v2"] { background: var(--plate) }`);
+  assert.deepEqual(rules[LINE], { "--blyrics-line-bg-color": "rgba(255,255,255,.1)" });
+  assert.deepEqual(rules['.blyrics--line[data-agent="v2"]'], { "--blyrics-line-bg-color": "var(--plate)" });
+  assert.deepEqual(flags, []);
+});
+
+test("background and background-color are one property in the line box's cascade", () => {
+  const cleared = migrate(`.blyrics--line[data-agent="v2"] { background: blue } ${LINE} { background-color: red } ${LINE} { background: none }`);
+  assert.deepEqual(cleared.rules[LINE], { "--blyrics-line-bg-color": "transparent" });
+  const { rules, flags } = migrate(`${LINE} { background: red; background-color: blue }`);
+  assert.deepEqual(rules[LINE], { "--blyrics-line-bg-color": "blue" });
+  assert.deepEqual(flags, []);
+});
+
+test("a variable on the word's ::after is not copied over the word's own", () => {
+  const { rules, flags } = migrate(`.blyrics--word { --blyrics-lyric-inactive-color: red } .blyrics--word::after { --blyrics-lyric-inactive-color: blue; --blyrics-glow-color: white }`);
+  assert.deepEqual(rules[".blyrics--word"], { "--blyrics-glow-color": "white" });
+  assert.ok(flags.some((flag) => flag.message.startsWith("The theme sets --blyrics-lyric-inactive-color on the word itself too")));
+});
+
+test("the words' rise keeps the timing the author set", () => {
+  const css = `:root { --blyrics-word-rise-easing: linear } .blyrics--word { transform: translateY(3px); transition: transform calc(var(--blyrics-duration) + 400ms) ease-out }
+    .blyrics--word.blyrics--animating { transform: none }`;
+  assert.deepEqual(migrate(css).rules[".blyrics-container"], { "--blyrics-word-rise-extra-duration": "0.4s" });
+});
+
+test("a 1px border is written, so it is not left the width of a broader rule's", () => {
+  const { rules } = migrate(`.blyrics--line { border: 4px solid red } .blyrics--line[data-agent="v2"] { border: 1px solid blue }`);
+  assert.deepEqual(rules[".blyrics--line"], { "--blyrics-line-border-color": "red", "--blyrics-line-border-width": "4px" });
+  assert.deepEqual(rules['.blyrics--line[data-agent="v2"]'], { "--blyrics-line-border-color": "blue", "--blyrics-line-border-width": "1px" });
+});
+
+test("the stage and no-lyrics guards on the container stay in the written selector", () => {
+  const css = `.blyrics-container:not([data-layout="stage"]) > .blyrics--line { background: red; text-shadow: 0 1px 2px black }
+    .blyrics-container:not([data-no-lyrics="true"]) .blyrics--romanized { background: none }`;
+  const { rules } = migrate(css);
+  assert.deepEqual(rules['.blyrics-container:not([data-layout="stage"]) > .blyrics--line'], { "--blyrics-text-shadow": "0 1px 2px black", "--blyrics-line-bg-color": "red" });
+  assert.deepEqual(rules['.blyrics-container:not([data-no-lyrics="true"]) .blyrics--romanized'], { "--blyrics-romanized-bg-color": "transparent" });
+});
+
+test("a border coloured only on hover becomes the hover border, and other hovered colours are reported", () => {
+  const { written, unsupported } = migrate(`.blyrics--line { border: 1px solid transparent } ${LINE}:hover { border-color: rgb(255 255 255 / .2) }`);
+  assert.deepEqual(written, { "hover-border-color": "rgb(255 255 255 / .2)" });
+  assert.deepEqual(unsupported, []);
+  assert.deepEqual(migrate(`.blyrics-container:hover > .blyrics--line:not(:hover) { outline-color: red }`).unsupported.map((u) => u.code), ["hover"]);
+});
+
+test("a sung line's shadow is not written over the shadow its words keep", () => {
+  const { output, flags } = migrate(`.blyrics--word { text-shadow: 0 0 2px black } .blyrics--line.blyrics--active { text-shadow: 0 0 10px white }`);
+  assert.doesNotMatch(output, /--blyrics-active-text-shadow/);
+  assert.ok(flags.some((flag) => flag.message.startsWith("`.blyrics--word` has a text shadow of its own")));
 });
