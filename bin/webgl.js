@@ -133,12 +133,14 @@ export function migrateForWebgl(source, css) {
   //    lists, the hovered line, the lines while browsing, the words' rise.
   const words = wordValues(rules, customs, authored, review, cover);
   const instrumental = instrumentalValues(rules, keyframes, authored, review, cover);
+  const boxes = lineBoxes(rules, customs, authored, review, unsupported, cover);
   const perSync = SYNCS.map((sync) => {
     const candidates = lineCandidates(rules, customs[sync], sync, review);
     return [
       ...distanceLists(candidates, authored, review),
       ...hoverValues(candidates, authored, review),
       ...hoverColor(rules, customs[sync], sync, authored, review, unsupported, cover),
+      ...hoverBoxes(rules, customs[sync], sync, boxes.found, authored, review, unsupported, cover),
       ...browsingValue(rules, customs[sync], sync, candidates, authored, review, cover),
       ...words.themeWide,
       ...instrumental,
@@ -154,6 +156,7 @@ export function migrateForWebgl(source, css) {
     ...words.groups,
     ...textShadows(rules, authored, review, unsupported, cover),
     ...romanizedBackgrounds(rules, authored, review, unsupported, cover),
+    ...boxes.groups,
     ...pseudo.groups,
     ...noLyrics.groups,
   ];
@@ -179,13 +182,14 @@ export function migrateForWebgl(source, css) {
     const otherFilter = property === "filter" && OTHER_FILTER.test(value);
     const lineFilter = property === "filter" && /\b(?:contrast|grayscale|sepia|hue-rotate|invert|drop-shadow)\s*\(/.test(value);
 
-    if (compounds(selector).some((part) => isHovered(part.compound)) && /^(?:opacity|filter|transform|scale|color|background|text-shadow)/.test(property)) {
+    if (compounds(selector).some((part) => isHovered(part.compound)) && /^(?:opacity|filter|transform|scale|color|background|text-shadow|outline$|border$|border-color$|box-shadow$)/.test(property)) {
+      if (/^(?:outline|border|border-color|box-shadow)$/.test(property) && drawsNothing(value)) return;
       if (/^background/.test(property) && (drawsNothing(value) || backgroundFill(property, value) === "transparent")) return;
       const line_ = expandIs(selector).map(hoveredLine).find(Boolean);
       if (!line_) {
         unsupported.push({ line, code: "hover", message: "Hover effects other than on the hovered line itself and the opacity of the other lines (for example blurring the other lines while the mouse is over the lyrics) do not show in the WebGL renderer." });
       } else if (otherFilter || !/^(?:opacity|filter|transform|scale)$/.test(property)) {
-        unsupported.push({ line, code: "hover", message: `\`${property}\` on a hovered line does not show. The line under the mouse can only change its opacity, blur, scale and the colour of its words before they are sung (\`--blyrics-line-hover-opacity\`, \`-blur\`, \`-scale\` and \`--blyrics-line-hover-color\`).` });
+        unsupported.push({ line, code: "hover", message: `\`${property}\` on a hovered line does not show. The line under the mouse can only change its opacity, blur, scale, the colour of its words before they are sung, its text shadow and the solid box behind it (\`--blyrics-line-hover-opacity\`, \`-blur\`, \`-scale\`, \`-color\`, \`-text-shadow\`, \`-bg-color\` and \`-border-color\`).` });
       }
       return;
     }
@@ -232,7 +236,7 @@ export function migrateForWebgl(source, css) {
           code: "paint",
           message: simples(lastCompound(selector)).includes(".blyrics--romanized")
             ? `\`${property}\` on romanizations is drawn only as a colour, from \`--blyrics-romanized-bg-color\` (the rounded box behind them); an image or gradient is not drawn by the WebGL renderer.`
-            : `\`${property}\` on lyric elements is not drawn by the WebGL renderer (it paints text, its shadow, the glow and image highlights only).`,
+            : `\`${property}\` on lyric elements is not drawn by the WebGL renderer ${PAINTS}.`,
         });
         return;
       case "box-shadow":
@@ -246,11 +250,11 @@ export function migrateForWebgl(source, css) {
       case "background-clip":
       case "mix-blend-mode":
         if (drawsNothing(value)) return;
-        unsupported.push({ line, code: "paint", message: `\`${property}\` on lyric elements is not drawn by the WebGL renderer (it paints text, its shadow, the glow and image highlights only).` });
+        unsupported.push({ line, code: "paint", message: `\`${property}\` on lyric elements is not drawn by the WebGL renderer ${PAINTS}.` });
         return;
       case "text-shadow":
         // What textShadows did not take: the sweep overlay's own shadow, or one on another element.
-        if (value !== "none") unsupported.push({ line, code: "paint", message: "`text-shadow` here is not drawn by the WebGL renderer. It draws one static shadow under the text of lines, words, translations and romanizations, from `--blyrics-text-shadow`." });
+        if (value !== "none") unsupported.push({ line, code: "paint", message: "`text-shadow` here is not drawn by the WebGL renderer. It draws shadows under the text of lines, words, translations and romanizations only, from `--blyrics-text-shadow`, `--blyrics-active-text-shadow` (the sung line) and `--blyrics-line-hover-text-shadow` (the line under the mouse)." });
         return;
       case "padding":
       case "padding-top":
@@ -324,10 +328,11 @@ function withBlock(source, groups, settings = []) {
     .filter(([, properties]) => properties.length > 0)
     .map(([selector, properties]) => `${and(properties)} on \`${selector}\``);
   const hover = (name) => name.includes("-hover-") || name.endsWith("-browsing");
-  const lines = names.some((name) => name.startsWith("--blyrics-line-") && !hover(name));
+  const box = (name) => /^--blyrics-line-(?:hover-)?(?:bg|border)-/.test(name);
+  const lines = names.some((name) => name.startsWith("--blyrics-line-") && !hover(name) && !box(name));
   const words = names.some((name) => name.startsWith("--blyrics-word-"));
   const instrumental = names.some((name) => name.startsWith("--blyrics-instrumental-"));
-  const checks = [lines && "the fade", names.some(hover) && "the hover", (words || settings.length > 0) && "the words", instrumental && "the instrumental icon"].filter(Boolean);
+  const checks = [lines && "the fade", names.some(box) && "the boxes behind lines", names.some(hover) && "the hover", (words || settings.length > 0) && "the words", instrumental && "the instrumental icon"].filter(Boolean);
   const listed = [names.join(", "), settings.length && `the comment setting${settings.length > 1 ? "s" : ""} ${settings.map((setting) => `\`${setting}\``).join(", ")}`].filter(Boolean);
   return {
     output,
@@ -1125,19 +1130,63 @@ function withoutRestingState(selector) {
   return joinCompounds(parts);
 }
 
-const STATE_SHADOW = "A text shadow that changes when a line or word is sung or hovered does not show: the WebGL renderer draws `--blyrics-text-shadow` the same in every state.";
+const STATE_SHADOW = "A text shadow that changes when a single word is sung, while the reader scrolls or while the mouse is over the lyrics does not show. The WebGL renderer draws `--blyrics-text-shadow`, with `--blyrics-active-text-shadow` on the line being sung and `--blyrics-line-hover-text-shadow` on the line under the mouse.";
 
 /** Elements whose text the renderer draws, which a text shadow reaches. */
 const SHADOWED = /^(?:\.blyrics--(?:line|word|translated|romanized)|\.blyrics-(?:container|line-main|bidi-run|word-group|background-line|background-lyric|content-line|line-synced-word))$/;
 /** The DOM renderer's copy of the text for the sweep, which the WebGL renderer does not draw. */
 const OVERLAY = /^\.blyrics-(?:highlight-run|word-highlight|sweep-text)$/;
+const SHADOW_NAMES = { rest: "--blyrics-text-shadow", active: "--blyrics-active-text-shadow", hover: "--blyrics-line-hover-text-shadow" };
 
-/** `--blyrics-text-shadow` from each static `text-shadow` on lyric text, under the same selector. */
+/**
+ * The state a text shadow's selector is for: { state, selector } with the selector it is to be
+ * written under, the state being "rest", "active" (the line being sung) or "hover" (the line under
+ * the mouse); { state: "sung-hover" } for the sung line only while hovered; null for any other.
+ */
+function shadowState(selector) {
+  if (!isStateful(selector)) return { state: "rest", selector: plainSelector(withoutRestingState(selector)) };
+  const found = new Set(
+    expandIs(selector).map((one) => {
+      let parts = compounds(one);
+      let state = "active";
+      const at = parts.findLastIndex((part) => isHovered(part.compound));
+      if (at >= 0) {
+        const line = hoveredLine(joinCompounds(parts.slice(0, at + 1)));
+        if (!line) return null;
+        parts = [...compounds(line), ...parts.slice(at + 1)];
+        state = "hover";
+      }
+      let sung = false;
+      let word = false;
+      parts = parts.map((part) => {
+        const own = simples(part.compound);
+        const kept = own.filter((s) => !STATE.test(s));
+        if (kept.length === own.length) return part;
+        // A sung word is a word state, which shadows are not told apart by.
+        word ||= own.some((s) => /^\.blyrics(?:--word|--letter|-line-synced-word)$/.test(s));
+        sung = true;
+        return { ...part, compound: kept.join("") || ".blyrics--line" };
+      });
+      const rest = joinCompounds(parts);
+      if (word || isStateful(rest) || (state === "active" && !sung)) return null;
+      return JSON.stringify(state === "hover" && sung ? { state: "sung-hover" } : { state, selector: plainSelector(withoutRestingState(rest)) });
+    })
+  );
+  return found.size === 1 && !found.has(null) ? JSON.parse([...found][0]) : null;
+}
+
+/**
+ * `--blyrics-text-shadow` from each static `text-shadow` on lyric text, under the same selector,
+ * and `--blyrics-active-text-shadow` / `--blyrics-line-hover-text-shadow` from those on the sung or
+ * hovered line and its text, under the selector without the state.
+ */
 function textShadows(rules, authored, review, unsupported, cover) {
   const out = [];
-  const name = "--blyrics-text-shadow";
+  const stated = [];
+  let order = 0;
   for (const { selector, conditional, declarations } of rules) {
     for (const [property, raw, important] of declarations) {
+      order++;
       if (property !== "text-shadow") continue;
       for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
         const parts = compounds(original);
@@ -1153,17 +1202,40 @@ function textShadows(rules, authored, review, unsupported, cover) {
         const line = parts.length > 1 && parts[parts.length - 1].combinator === ">" && simples(parts[parts.length - 2].compound).includes(".blyrics-container");
         if (!subject.some((s) => SHADOWED.test(s)) && !line) continue;
         cover(original, property);
-        if (isStateful(original)) {
+        const where = shadowState(original);
+        const name = SHADOW_NAMES[where?.state];
+        if (!where) {
           unsupported.push({ line: original, code: "state-shadow", message: STATE_SHADOW });
+        } else if (where.state === "sung-hover") {
+          review("This text shadow is for the line being sung only while the mouse is over it. `--blyrics-line-hover-text-shadow` applies to whichever line is under the mouse, so it was not written; set it on the lines by hand if every hovered line may take it.", original);
         } else if (conditional) {
           review(`This text shadow applies to only some screens, so ${name} was not written for it. Set it under a media query of your own if it matters.`, original);
         } else if (authored.has(name)) {
           review(`The theme already sets ${name}, so it was left as written.`);
+        } else if (where.state === "rest") {
+          stated.push({ ...where, raw, important, specificity: specificity(original), order });
+          out.push({ selector: where.selector, declarations: [`${name}: ${raw}${important ? " !important" : ""};`] });
         } else {
-          out.push({ selector: plainSelector(withoutRestingState(original)), declarations: [`${name}: ${raw}${important ? " !important" : ""};`] });
+          stated.push({ ...where, raw, important, specificity: specificity(original), order, original });
         }
       }
     }
+  }
+  // One shadow a state on each selector: the one the cascade gives the line in that state.
+  const won = new Map();
+  for (const entry of stated.filter((e) => e.state !== "rest")) {
+    const key = `${entry.state}\n${entry.selector}`;
+    if (!won.has(key) || winner([won.get(key), entry]) === entry) won.set(key, entry);
+  }
+  for (const entry of [...won.values()].sort((a, b) => a.order - b.order)) {
+    const name = SHADOW_NAMES[entry.state];
+    // A shadow at rest the cascade puts over this one keeps the line as it is in that state too.
+    const beaten = stated.find((e) => e.state === "rest" && e.selector === entry.selector && winner([entry, e].sort((a, b) => a.order - b.order)) === e);
+    if (beaten) {
+      review(`The theme's text shadow at rest (\`${beaten.raw}\`) outweighs this one, so ${name} was not written; check which the line should take.`, entry.original);
+      continue;
+    }
+    out.push({ selector: entry.selector, declarations: [`${name}: ${entry.raw}${entry.important ? " !important" : ""};`] });
   }
   return out;
 }
@@ -1200,6 +1272,224 @@ function romanizedBackgrounds(rules, authored, review, unsupported, cover) {
     }
   }
   return dedupe(found).map((f) => ({ selector: f.selector, declarations: [`${name}: ${f.value}${f.important ? " !important" : ""};`] }));
+}
+
+// -- Boxes behind lines -----------------------------------------------------
+
+/** The properties that paint a box behind a line, and which of its two parts each paints. */
+const BOX_PROPERTIES = { background: "bg", "background-color": "bg", outline: "border", border: "border" };
+const BOX_NAMES = { bg: "--blyrics-line-bg-color", border: "--blyrics-line-border-color" };
+const HOVER_BOX_NAMES = { bg: "--blyrics-line-hover-bg-color", border: "--blyrics-line-hover-border-color" };
+const BORDER_STYLE = /^(?:none|hidden|dotted|dashed|solid|double|groove|ridge|inset|outset|auto)$/i;
+const BORDER_WIDTH = { thin: "1px", medium: "3px", thick: "5px" };
+const ONLY_SOLID = "Only a solid colour is drawn behind a line, from `--blyrics-line-bg-color`, with a solid border or outline from `--blyrics-line-border-color` and `--blyrics-line-border-width`. A gradient, an image or another border style is not drawn by the WebGL renderer.";
+const STATE_BOX = "A box behind a line that changes when the line is sung, while the reader scrolls or while the mouse is over the lyrics does not show. The WebGL renderer draws `--blyrics-line-bg-color` and `--blyrics-line-border-color` the same in every state but one, the line under the mouse (`--blyrics-line-hover-bg-color` and `--blyrics-line-hover-border-color`).";
+
+/**
+ * Whether a selector paints a box behind lines: { selector } to write it under, { hover: true } for
+ * the line under the mouse, { stateful: true } for a state the renderer cannot scope by; null when
+ * its subject is no line.
+ */
+function boxScope(selector) {
+  const parts = compounds(selector);
+  const last = parts[parts.length - 1];
+  if (!last || syncOf(selector) === null) return null;
+  const subject = simples(last.compound);
+  if (subject.some((s) => s.startsWith("::") || PSEUDO.test(s))) return null;
+  if (subject.some((s) => s.startsWith(".blyrics") && !/^\.blyrics--(?:line|active|animating|paused|instrumental)$/.test(s))) return null;
+  const child = parts.length > 1 && last.combinator === ">" && simples(parts[parts.length - 2].compound).includes(".blyrics-container");
+  if (!subject.includes(".blyrics--line") && !subject.some((s) => STATE.test(s)) && !child) return null;
+  if (expandIs(selector).every((one) => hoverTarget(one)?.layer === "line")) return { hover: true };
+  if (isStateful(selector)) return { stateful: true };
+  return { selector: plainSelector(withoutRestingState(selector)) };
+}
+
+/**
+ * What a box property paints, read with `customs`: { color, width } to write (width null for 1px),
+ * "transparent" when it draws nothing, undefined when it draws what the box cannot (an image, a
+ * dashed border), null when it cannot be read. A colour given as one variable is written as that
+ * variable, so it keeps following the theme.
+ */
+function boxValue(property, raw, customs) {
+  if (drawsNothing(raw)) return "transparent";
+  if (property === "background" || property === "background-color") {
+    const fill = backgroundFill(property, resolve(raw, customs));
+    if (fill === undefined || fill === null || fill === "transparent") return fill;
+    if (/\bvar\(/.test(fill)) return null;
+    return { color: /^var\([^()]*\)$/.test(raw) ? raw : fill, width: null };
+  }
+  const split = (text) => splitTopLevel(text, " ").map((t) => t.trim()).filter(Boolean);
+  let tokens = split(raw).map((token) => ({ raw: token, value: resolve(token, customs) }));
+  // A variable that stands for more than one part of the shorthand is read whole.
+  if (tokens.some((t) => split(t.value).length > 1)) tokens = split(resolve(raw, customs)).map((value) => ({ raw: value, value }));
+  let style = "none";
+  let width = { raw: "3px", value: "3px" };
+  let color = null;
+  for (const token of tokens) {
+    const value = token.value.toLowerCase();
+    if (/\bvar\(/.test(value)) return null;
+    if (BORDER_STYLE.test(value)) style = value;
+    else if (BORDER_WIDTH[value]) width = { raw: BORDER_WIDTH[value], value: BORDER_WIDTH[value] };
+    else if (/^(?:\d+(?:\.\d+)?|\.\d+)[a-z]+$|^0$/.test(value)) width = token;
+    else if (cssColor(token.value) !== null) color = token;
+    else return null;
+  }
+  if (style === "none" || style === "hidden" || /^0(?:\.0+)?[a-z]*$/.test(width.value) || color?.value.toLowerCase() === "transparent") return "transparent";
+  if (style !== "solid") return undefined;
+  // No colour is currentColor, which is the element's own text colour.
+  if (!color) return null;
+  return { color: /^var\([^()]*\)$/.test(color.raw) ? color.raw : color.value, width: width.value === "1px" ? null : /^var\(/.test(width.raw) ? width.raw : width.value };
+}
+
+/** A value as every song the selector is for reads it, or null when they differ. */
+function readValue(selector, read, customs) {
+  const sync = syncOf(selector);
+  const key = (value) => (value === undefined ? "undefined" : JSON.stringify(value));
+  const values = new Set((sync ? [sync] : SYNCS).map((s) => key(read(customs[s]))));
+  return values.size === 1 ? ([...values][0] === "undefined" ? undefined : JSON.parse([...values][0])) : null;
+}
+
+/**
+ * `--blyrics-line-bg-color`, `--blyrics-line-border-color` and `--blyrics-line-border-width` from
+ * each static `background`, `outline` or `border` on a line, under the same selector. The box's
+ * corner radius is the line's own `border-radius`, which stays as written.
+ */
+function lineBoxes(rules, customs, authored, review, unsupported, cover) {
+  const found = [];
+  let order = 0;
+  for (const { selector, conditional, declarations } of rules) {
+    for (const [property, raw, important] of declarations) {
+      order++;
+      const kind = BOX_PROPERTIES[property];
+      if (!kind) continue;
+      for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
+        const where = boxScope(original);
+        if (!where || where.hover) continue;
+        cover(original, property);
+        const value = readValue(original, (within) => boxValue(property, raw, within), customs);
+        if (value === undefined) unsupported.push({ line: original, code: "line-box", message: ONLY_SOLID });
+        else if (where.stateful) {
+          if (value !== "transparent") unsupported.push({ line: original, code: "state-box", message: STATE_BOX });
+        } else if (conditional) {
+          review("This box behind lines applies to only some screens, so --blyrics-line-bg-color and --blyrics-line-border-color were not written for it. Set them under a media query of your own if it matters.", original);
+        } else {
+          found.push({ kind, property, selector: where.selector, original, raw, value, important, specificity: specificity(original), order });
+        }
+      }
+    }
+  }
+
+  // What the cascade gives each selector: the last of the weightiest for each property.
+  const won = new Map();
+  for (const entry of found) {
+    const key = `${entry.selector}\n${entry.property}`;
+    if (!won.has(key) || winner([won.get(key), entry]) === entry) won.set(key, entry);
+  }
+  const drawn = (kind) => [...won.values()].some((e) => e.kind === kind && e.value && typeof e.value === "object");
+  const bySelector = new Map();
+  for (const entry of [...won.values()].sort((a, b) => a.order - b.order)) {
+    const name = BOX_NAMES[entry.kind];
+    if (authored.has(name) || (entry.kind === "border" && authored.has("--blyrics-line-border-width"))) {
+      review(`The theme already sets ${name}, so it was left as written.`);
+      continue;
+    }
+    if (entry.value === null) {
+      review(`Could not read \`${entry.property}: ${entry.raw}\` on the line as a solid colour, so ${name} was not written; set it by hand.`, entry.original);
+      continue;
+    }
+    // Clearing a box matters only where another rule draws one.
+    if (entry.value === "transparent" && !drawn(entry.kind)) continue;
+    const declarations = bySelector.get(entry.selector) ?? new Map();
+    const other = declarations.get(name);
+    if (other && other.property !== entry.property && other.value !== "transparent") {
+      // A border and an outline are both drawn; the renderer draws one.
+      if (entry.value === "transparent") continue;
+      review(`This line has both a border and an outline, and the WebGL renderer draws one, so ${name} takes the ${entry.property}; check it.`, entry.original);
+    }
+    declarations.set(name, entry);
+    bySelector.set(entry.selector, declarations);
+  }
+  const important = (entry) => (entry.important ? " !important" : "");
+  const groups = [...bySelector].map(([selector, declarations]) => ({
+    selector,
+    declarations: [...declarations].flatMap(([name, entry]) => {
+      if (entry.value === "transparent") return [`${name}: transparent${important(entry)};`];
+      return [`${name}: ${entry.value.color}${important(entry)};`, ...(entry.value.width ? [`--blyrics-line-border-width: ${entry.value.width}${important(entry)};`] : [])];
+    }),
+  }));
+  return { groups, found };
+}
+
+/**
+ * `--blyrics-line-hover-bg-color` and `--blyrics-line-hover-border-color`, from the box a
+ * `.blyrics--line:hover` rule draws. They apply to whichever line is hovered, so they are written
+ * when every line ends up the same, as the other hover values are.
+ */
+function hoverBoxes(rules, customs, sync, boxes, authored, review, unsupported, cover) {
+  const candidates = { bg: [], border: [] };
+  let order = 0;
+  for (const { selector, conditional, declarations } of rules) {
+    for (const [property, raw, important] of declarations) {
+      order++;
+      const kind = BOX_PROPERTIES[property];
+      if (!kind) continue;
+      for (const original of splitTopLevel(selector, ",").map((s) => s.trim())) {
+        if (!boxScope(original)?.hover) continue;
+        // Alternatives for the other sync type pick no line here.
+        const roles = expandIs(original).map((one) => lineRole(hoverTarget(one).line, sync)).filter(Boolean);
+        if (roles.length === 0) continue;
+        cover(original, property);
+        const value = boxValue(property, raw, customs);
+        if (value === undefined) {
+          unsupported.push({ line: original, code: "line-box", message: ONLY_SOLID });
+        } else if (conditional || roles.some((role) => role.scoped)) {
+          review(`This box behind the hovered line applies to only some screens, views or lines, so ${HOVER_BOX_NAMES[kind]} was not written for it. Set it under a selector or media query of your own if it matters.`, original);
+        } else {
+          for (const role of roles) candidates[kind].push({ ...role, property, value, raw, selector: original, important, specificity: specificity(original), order });
+        }
+      }
+    }
+  }
+
+  const out = [];
+  for (const [kind, all] of Object.entries(candidates)) {
+    if (all.length === 0) continue;
+    const name = HOVER_BOX_NAMES[kind];
+    if (authored.has(name)) {
+      review(`The theme already sets ${name}, so it was left as written.`);
+      continue;
+    }
+    const reach = reachOf(all);
+    const won = [...cascade(all, "before", reach), ...cascade(all, "after", reach)];
+    const values = new Set(won.map((c) => (c ? JSON.stringify(c.value) : "none")));
+    const [value] = [...values].map((v) => (v === "none" ? undefined : JSON.parse(v)));
+    const first = all[0].selector;
+    if (values.size !== 1 || value === undefined) {
+      review(`The theme's hover box differs from line to line, and ${name} applies to whichever line is hovered, so it was not written; set it by hand.`, first);
+      continue;
+    }
+    if (value === null) {
+      review(`Could not read \`${all[0].property}: ${all[0].raw}\` on the hovered line as a solid colour, so ${name} was not written; set it by hand.`, first);
+      continue;
+    }
+    // A box at rest that outweighs the hover rule keeps those lines as they are.
+    const hover = winner(all);
+    const beaten = boxes.find((b) => b.kind === kind && b.value && typeof b.value === "object" && (b.important !== hover.important ? b.important : compareSpecificity(b.specificity, hover.specificity) > 0));
+    if (beaten) {
+      review(`The theme's box behind ${beaten.selector} outweighs its hover box, and ${name} applies to whichever line is hovered, so it was not written; set it by hand.`, first);
+      continue;
+    }
+    if (value === "transparent") {
+      // Clearing the box on hover matters only where a line has one.
+      if (boxes.some((b) => b.kind === kind && b.value && typeof b.value === "object")) out.push(`${name}: transparent;`);
+      continue;
+    }
+    if (value.width) {
+      review(`The hovered line's ${hover.property} is ${value.width} wide. The WebGL renderer draws it as wide as the line's own border, \`--blyrics-line-border-width\` (1px unless set); check it.`, first);
+    }
+    out.push(`${name}: ${value.color};`);
+  }
+  return out;
 }
 
 /**
@@ -1772,6 +2062,8 @@ function cssColor(value) {
   return /^(?:#[\da-f]{3,8}|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix|light-dark)\(.*\)|[a-z]+)$/i.test(value) ? value : null;
 }
 
+/** What a theme says the DOM renderer painted with, which the WebGL renderer does not paint. */
+const PAINTS = "(it paints text, its shadows, the glow, image highlights and solid boxes behind lines and romanizations only)";
 const NO_PAINT = /^(?:none|hidden|normal|initial|unset|revert|revert-layer|transparent|-?0(?:\.0+)?(?:[a-z]+|%)?)$/i;
 
 /**

@@ -26,7 +26,7 @@ function blockRules(output) {
   const block = output.match(/\/\* create-bl-theme migrate: WebGL renderer \(begin\)[\s\S]*?WebGL renderer \(end\) \*\//)?.[0] ?? "";
   const rules = {};
   for (const [, selector, body] of block.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    rules[selector.trim()] = Object.fromEntries([...body.matchAll(/(--[\w-]+): ([^;]*);/g)].map((m) => [m[1], m[2]]));
+    rules[selector.trim()] = { ...rules[selector.trim()], ...Object.fromEntries([...body.matchAll(/(--[\w-]+): ([^;]*);/g)].map((m) => [m[1], m[2]])) };
   }
   return rules;
 }
@@ -269,6 +269,34 @@ test("a static text shadow is drawn, one that changes with state is not", () => 
   assert.deepEqual(unsupported.map((u) => u.code), ["state-shadow"]);
 });
 
+test("the sung line's and the hovered line's shadows become state shadows", () => {
+  const css = `${LINE} { text-shadow: none } ${LINE}.blyrics--active, ${LINE}.blyrics--animating { text-shadow: 0 0 8px white !important }
+    .blyrics-container:not([data-no-lyrics="true"]) > .blyrics--line.blyrics--active .blyrics-line-main { text-shadow: 0 2px 4px black }
+    ${LINE}:hover { text-shadow: 0 0 6px gold } ${LINE}:hover > span > .blyrics--word { text-shadow: 0 0 2px gold }`;
+  const { rules, unsupported, flags } = migrate(css);
+  assert.deepEqual(rules[LINE], { "--blyrics-text-shadow": "none", "--blyrics-active-text-shadow": "0 0 8px white !important", "--blyrics-line-hover-text-shadow": "0 0 6px gold" });
+  assert.deepEqual(rules[`${LINE} .blyrics-line-main`], { "--blyrics-active-text-shadow": "0 2px 4px black" });
+  assert.deepEqual(rules[`${LINE} .blyrics--word`], { "--blyrics-line-hover-text-shadow": "0 0 2px gold" });
+  assert.deepEqual([unsupported, flags], [[], []]);
+});
+
+test("shadows on word states, while scrolling, or only on the hovered sung line are not written", () => {
+  const { output, unsupported, flags } = migrate(`${SUNG} .blyrics--word[data-word-state="active"] { text-shadow: 0 0 4px white }
+    .blyrics-container.blyrics-user-scrolling > .blyrics--line.blyrics--active { text-shadow: none }
+    ${SUNG}:hover { text-shadow: 0 0 14px white }`);
+  assert.doesNotMatch(output, /--blyrics-(?:active|line-hover)-text-shadow/);
+  assert.deepEqual(unsupported.map((u) => [u.code, u.where.length]), [["state-shadow", 2]]);
+  assert.ok(flags.some((flag) => flag.message.includes("only while the mouse is over it")));
+});
+
+test("a sung line's shadow that a shadow at rest outweighs, or for some screens, is left to the author", () => {
+  for (const css of [`${LINE} { text-shadow: none !important } ${SUNG} { text-shadow: 0 0 8px white }`, `@media (max-width: 600px) { ${SUNG} { text-shadow: 0 0 8px white } }`]) {
+    const { output, flags } = migrate(css);
+    assert.doesNotMatch(output, /--blyrics-active-text-shadow/, css);
+    assert.ok(flags.some((flag) => flag.code === "review"), css);
+  }
+});
+
 test("paint that draws nothing is not reported", () => {
   for (const declaration of ["border: 0", "border: none !important", "border: 0px solid red", "border: 2px solid transparent", "border: revert", "outline: none", "outline: initial", "outline: unset", "box-shadow: none", "-webkit-text-stroke: 0 transparent", "-webkit-text-stroke-width: 0px", "mix-blend-mode: normal", "background-image: none"]) {
     const { unsupported } = migrate(`.blyrics--romanized, .blyrics--translated, ${LINE}:hover .blyrics--word { ${declaration} }`);
@@ -277,6 +305,46 @@ test("paint that draws nothing is not reported", () => {
   for (const declaration of ["border: 1px solid red", "box-shadow: 0 0 4px red", "-webkit-text-stroke: 1px red"]) {
     assert.equal(migrate(`.blyrics--romanized { ${declaration} }`).unsupported.length, 1, declaration);
   }
+});
+
+test("a line's solid background and outline become the box behind it", () => {
+  const stage = '.blyrics-container[data-layout="stage"] > .blyrics--line:not([data-blank="true"], [data-instrumental="true"])';
+  const css = `:root { --plate: oklch(15% 0 0 / .8); --edge: oklch(1 0 0 / .1) }
+    ${stage}, .blyrics-container[data-layout="stage"] > .blyrics-credits { background: var(--plate); border-radius: .46em; outline: 1px solid var(--edge); outline-offset: -1px }
+    .blyrics--line[data-agent="v2"] { background-color: #2228; border: 2px solid #fff3 !important }`;
+  const { rules, unsupported, flags } = migrate(css);
+  assert.deepEqual(rules[stage], { "--blyrics-line-bg-color": "var(--plate)", "--blyrics-line-border-color": "var(--edge)" });
+  assert.deepEqual(rules['.blyrics--line[data-agent="v2"]'], { "--blyrics-line-bg-color": "#2228", "--blyrics-line-border-color": "#fff3 !important", "--blyrics-line-border-width": "2px !important" });
+  assert.deepEqual([unsupported, flags], [[], []]);
+});
+
+test("a line box the renderer cannot draw, that changes with state, or for some screens is not written", () => {
+  const { output, unsupported, flags } = migrate(`${LINE} { background: linear-gradient(red, blue); outline: 1px dashed red }
+    ${SUNG} { background: red } .blyrics-container:hover > .blyrics--line:not(:hover) { outline: initial }
+    @media (max-width: 600px) { ${LINE} { background: none } }
+    .blyrics--line[data-agent="v2"] { background: var(--set-elsewhere) }`);
+  assert.doesNotMatch(output, /--blyrics-line-(?:bg|border)/);
+  assert.deepEqual(unsupported.map((u) => [u.code, u.where.length]), [["line-box", 1], ["state-box", 1]]);
+  assert.equal(flags.filter((flag) => flag.code === "review").length, 2);
+  // Clearing a box no rule draws needs nothing.
+  assert.deepEqual(migrate(`${LINE} { background: none; outline: 0 }`).output, `${LINE} { background: none; outline: 0 }`);
+  const { output: kept, flags: noted } = migrate(`${LINE} { --blyrics-line-bg-color: red; background: blue }`);
+  assert.doesNotMatch(kept, /WebGL renderer \(begin\)/);
+  assert.ok(noted.some((flag) => flag.message.includes("already sets --blyrics-line-bg-color")));
+});
+
+test("a hovered line's box becomes the hover box", () => {
+  const css = `:root { --box: rgb(255 255 255 / .1) }
+    .blyrics-container[data-sync="richsync"] .blyrics--line:hover, .blyrics-container[data-sync="synced"] .blyrics--line:hover { outline: 1px solid var(--box) !important; outline-offset: -1px; background: var(--box) !important }`;
+  const { written, unsupported } = migrate(css);
+  assert.deepEqual(written, { "hover-bg-color": "var(--box)", "hover-border-color": "var(--box)" });
+  assert.deepEqual(unsupported, []);
+  for (const other of [`${SUNG}:hover { background: red }`, `@media (max-width: 600px) { ${LINE}:hover { background: red } }`, `${LINE} { background: blue !important } ${LINE}:hover { background: red }`]) {
+    const { written: none, flags } = migrate(other);
+    assert.equal(none["hover-bg-color"], undefined, other);
+    assert.ok(flags.some((flag) => flag.code === "review"), other);
+  }
+  assert.deepEqual(migrate(`${LINE}:hover { background: radial-gradient(red, blue) }`).unsupported.map((u) => u.code), ["line-box"]);
 });
 
 test("variables on the word's ::after move onto the word", () => {
