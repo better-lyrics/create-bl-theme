@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 import { imageSize } from "image-size";
 import { execSync, spawn } from "child_process";
 import { compileWithDetails } from "rics";
-import { DISCORD_URL, migrateForWebgl, withoutBlock } from "./webgl.js";
+import { DISCORD_URL, hasBlock, migrateForWebgl, withoutBlock } from "./webgl.js";
 import { perfReport } from "./perf.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1204,7 +1204,8 @@ function perf(target, { json } = {}) {
   const log = json ? console.error : console.log;
   const stylePath = stylePathOf(target, log);
   // The block migrate wrote is what the WebGL renderer reads, so it is read too.
-  const { css, errors } = compiledStyle(stylePath, fs.readFileSync(stylePath, "utf-8"));
+  const source = fs.readFileSync(stylePath, "utf-8");
+  const { css, errors } = compiledStyle(stylePath, source);
   if (errors.length > 0) {
     log(pc.red(pc.bold("  style.rics does not compile, so it cannot be read:")));
     errors.forEach((message) => log(pc.red(`    - ${message}`)));
@@ -1214,7 +1215,7 @@ function perf(target, { json } = {}) {
   const rel = path.relative(process.cwd(), stylePath);
   const shown = rel && !rel.startsWith("..") ? rel : stylePath;
   if (json) {
-    console.log(JSON.stringify({ file: shown, ...report }, null, 2));
+    console.log(JSON.stringify({ file: shown, migrated: hasBlock(source), ...report }, null, 2));
     return;
   }
 
@@ -1222,6 +1223,10 @@ function perf(target, { json } = {}) {
   const label = (cost) => paint[cost](pc.bold(cost.toUpperCase().padEnd(6)));
   console.log(pc.bold(`  What ${pc.cyan(shown)} costs in the WebGL renderer`));
   console.log();
+  if (!hasBlock(source)) {
+    console.log(pc.yellow(`  This theme has not been migrated, so this covers only the renderer's variables it sets, not what its rules do. Run ${pc.cyan("migrate --write")} first.`));
+    console.log();
+  }
   for (const feature of report.features) {
     console.log(`  ${label(feature.cost)}  ${pc.bold(feature.title)}: ${feature.reason}.`);
     for (const source of feature.source) console.log(pc.dim(`          ${source}`));

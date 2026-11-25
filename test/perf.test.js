@@ -83,3 +83,33 @@ test("the command prints JSON for a .rics theme, migrate's block included", () =
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("an unmigrated theme is said to be one", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "create-bl-theme-"));
+  try {
+    const file = path.join(dir, "style.css");
+    const run = (...args) => spawnSync(process.execPath, [CLI, "perf", file, ...args], { encoding: "utf8" }).stdout;
+    fs.writeFileSync(file, ".blyrics--line:not(.blyrics--active) { filter: blur(2px) }\n");
+    assert.equal(JSON.parse(run("--json")).migrated, false);
+    assert.match(run(), /has not been migrated/);
+    spawnSync(process.execPath, [CLI, "migrate", file, "--write"], { encoding: "utf8" });
+    assert.equal(JSON.parse(run("--json")).migrated, true);
+    assert.doesNotMatch(run(), /has not been migrated/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("switches are read where every song reads them, and pseudo-elements are not read", () => {
+  assert.ok(ids('.blyrics-container[data-sync="synced"] { --blyrics-animate-highlight-glow: 0 }').includes("glow-every-word"));
+  assert.ok(ids(".blyrics-container { --blyrics-animate-highlight-glow: 1 !important } .blyrics-container { --blyrics-animate-highlight-glow: 0 }").includes("glow-every-word"));
+  assert.ok(!ids(".blyrics-container { --blyrics-animate-highlight-glow: 0 }").includes("glow-every-word"));
+  assert.ok(!ids(".blyrics--word::before { --blyrics-text-shadow: 0 0 2px red }").includes("text-shadow"));
+});
+
+test("distance lists are rated as the container reads them", () => {
+  assert.ok(!ids(".blyrics-container { --blyrics-line-blur: 0 4px; --blyrics-line-blur-before: 0; --blyrics-line-blur-after: 0 }").includes("line-blur"));
+  assert.ok(!ids(".blyrics--word:hover { --blyrics-line-blur: 0 4px }").includes("line-blur"));
+  assert.deepEqual(source('.blyrics-container[data-sync="synced"] { --blyrics-line-blur-after: 0 2px }', "line-blur"), ['`--blyrics-line-blur-after: 0 2px` on `.blyrics-container[data-sync="synced"]`']);
+  assert.ok(!ids(".blyrics--line { --blyrics-line-opacity: 1 0.5 }").includes("line-opacity"));
+});
