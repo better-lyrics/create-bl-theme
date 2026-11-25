@@ -1230,7 +1230,8 @@ function perf(target, { json } = {}) {
   }
   const because = report.features.filter((f) => report.because.includes(f.id)).map((f) => f.title.toLowerCase());
   console.log(`  ${pc.bold("Overall:")} ${label(report.overall).trim()}${because.length ? pc.dim(`, from ${because.join(" and ")}`) : ""}`);
-  console.log(pc.dim("  The costs are estimates; measured ones will replace them."));
+  console.log(pc.dim("  Costs are the GPU time each feature adds to a frame on a desktop GPU: low is under 0.05 ms, medium up to"));
+  console.log(pc.dim("  0.25 ms, high more. A frame at 60 fps has 16.7 ms, so even high matters mostly on slow or battery-saving GPUs."));
   console.log();
 }
 

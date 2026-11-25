@@ -3,8 +3,12 @@
 // `create-bl-theme perf`. One entry per feature: what turns it on (`detect`),
 // how much it costs and why, and how to make it cheaper.
 //
-// The costs are provisional ratings, to be replaced by numbers measured with
-// braccato's bench (`pnpm bench`). Keep them here, so that is one edit.
+// The costs are measured with braccato's bench (`pnpm bench`, the "kettle" song
+// in a 1280x873 window on a desktop GPU), as the GPU time a feature adds to each
+// frame over a theme without it: low is under 0.05 ms, medium up to 0.25 ms,
+// high more. The measured number is beside each cost; "est." marks one judged
+// from a measured neighbour. Remeasure and update them here when the renderer
+// changes.
 //
 // `detect(theme)` returns where the theme turns the feature on, as a list of
 // short descriptions, or null when it is off. `theme` is what bin/perf.js
@@ -59,7 +63,7 @@ export const FEATURES = [
   {
     id: "glow-every-word",
     title: "Glow on every word",
-    cost: "high",
+    cost: "medium", // +0.15 ms
     reason: "each glowing word is drawn again and blurred on the GPU every frame while its glow fades, a second or more after it is sung, so several words glow at once",
     tip: "Keep the glow to held words with `.blyrics-word-highlight:not([data-long-word]) { --blyrics-glow-color: transparent; }`, or turn it off with `--blyrics-animate-highlight-glow: 0`.",
     detect: (theme) => glow(theme)?.all ?? null,
@@ -67,7 +71,7 @@ export const FEATURES = [
   {
     id: "glow-held-words",
     title: "Glow on held words",
-    cost: "medium",
+    cost: "low", // +0.01 ms
     reason: "each held word is drawn again and blurred on the GPU every frame while its glow fades",
     tip: "Turn the glow off with `--blyrics-animate-highlight-glow: 0` if the theme does not need it.",
     detect: (theme) => glow(theme)?.held ?? null,
@@ -75,8 +79,8 @@ export const FEATURES = [
   {
     id: "letter-wave-every-word",
     title: "Letter wave on every word",
-    cost: "medium",
-    reason: "every word is split into letters, each moved and drawn on its own while the word is sung",
+    cost: "low", // +0.00 ms GPU, +0.01 ms CPU, 3x the quads
+    reason: "every word is split into letters, each moved and drawn on its own while the word is sung; that is more to draw, but little GPU time",
     tip: "Wave only held words with the comment setting `/* blyrics-letter-wave = long; */`.",
     detect: (theme) => {
       if (letterWave(theme) !== "all") return null;
@@ -87,7 +91,7 @@ export const FEATURES = [
   {
     id: "letter-wave-held-words",
     title: "Letter wave on held words",
-    cost: "low",
+    cost: "low", // +0.00 ms
     reason: "only held words are split into letters",
     tip: null,
     detect: (theme) => (letterWave(theme) === "long" ? [`\`blyrics-letter-wave = ${theme.setting("blyrics-letter-wave")};\` (comment setting)`] : null),
@@ -95,7 +99,7 @@ export const FEATURES = [
   {
     id: "letter-wave-glow",
     title: "Letter wave glow",
-    cost: "low",
+    cost: "low", // +0.00 ms
     reason: "it brightens the glow a held word already draws, letter by letter",
     tip: null,
     detect: (theme) => {
@@ -107,7 +111,7 @@ export const FEATURES = [
   {
     id: "line-blur",
     title: "Line distance blur",
-    cost: "high",
+    cost: "high", // +0.43 ms, about 1 ms at the 95th percentile
     reason: "each blurred line is drawn again and blurred on the GPU every frame, and lines are large",
     tip: "Blur fewer lines (end the list early with its last value, or 0), or fade them with `--blyrics-line-opacity-*` instead.",
     detect: (theme) => {
@@ -118,7 +122,7 @@ export const FEATURES = [
   {
     id: "hover-blur",
     title: "Hover blur",
-    cost: "medium",
+    cost: "medium", // est.: one line of line-blur's eight
     reason: "the line under the mouse is drawn again and blurred on the GPU every frame while it is hovered",
     tip: "Use `--blyrics-line-hover-opacity` instead, or `--blyrics-line-hover-blur: 0` to sharpen the hovered line, which costs nothing.",
     detect: (theme) => {
@@ -129,7 +133,7 @@ export const FEATURES = [
   {
     id: "line-filters",
     title: "Line saturation and brightness",
-    cost: "low",
+    cost: "low", // +0.00 ms
     reason: "applied to each line's colours as it is drawn",
     tip: null,
     detect: (theme) => {
@@ -140,7 +144,7 @@ export const FEATURES = [
   {
     id: "line-opacity",
     title: "Line distance opacity",
-    cost: "low",
+    cost: "low", // +0.00 ms
     reason: "applied to each line as it is drawn",
     tip: null,
     detect: (theme) => {
@@ -151,7 +155,7 @@ export const FEATURES = [
   {
     id: "browsing-opacity",
     title: "Opacity while browsing",
-    cost: "low",
+    cost: "low", // est.: as line-opacity
     reason: "applied to each line as it is drawn",
     tip: null,
     detect: (theme) => {
@@ -162,7 +166,7 @@ export const FEATURES = [
   {
     id: "hover-look",
     title: "Hover opacity, scale and colour",
-    cost: "low",
+    cost: "low", // est.: as line-opacity
     reason: "applied to the hovered line as it is drawn",
     tip: null,
     detect: (theme) => {
@@ -173,8 +177,8 @@ export const FEATURES = [
   {
     id: "text-shadow",
     title: "Text shadow",
-    cost: "low",
-    reason: "drawn once into the line's texture, not every frame",
+    cost: "medium", // +0.10 ms
+    reason: "drawn once into the line's texture, but drawn again under the text every frame over the area the shadow spreads to",
     tip: null,
     detect: (theme) => {
       const found = theme.declared("--blyrics-text-shadow").filter((d) => d.value !== "none").map(theme.where);
@@ -184,8 +188,8 @@ export const FEATURES = [
   {
     id: "state-shadows",
     title: "Sung and hovered line shadows",
-    cost: "low",
-    reason: "drawn once into the line's texture; only their opacity changes from frame to frame",
+    cost: "medium", // +0.12 ms, 0.02 ms over one static shadow
+    reason: "drawn once into the line's texture like a static shadow, and drawn again under the text every frame, two shadows at once while a line changes state",
     tip: null,
     detect: (theme) => {
       const found = theme.declared(/^--blyrics-(?:active|line-hover)-text-shadow$/).filter((d) => d.value !== "none").map(theme.where);
@@ -195,8 +199,8 @@ export const FEATURES = [
   {
     id: "line-boxes",
     title: "Boxes behind lines",
-    cost: "low",
-    reason: "one quad behind each line that has one",
+    cost: "medium", // +0.07 ms
+    reason: "drawn every frame over each boxed line's whole area",
     tip: null,
     detect: (theme) => {
       const found = theme.declared(/^--blyrics-line-(?:hover-)?(?:bg|border)-color$/).filter((d) => !theme.clear(d.value)).map(theme.where);
@@ -206,7 +210,7 @@ export const FEATURES = [
   {
     id: "word-wobble",
     title: "Word wobble",
-    cost: "low",
+    cost: "low", // +0.00 ms
     reason: "moves each word as one piece while it is sung",
     tip: null,
     detect: (theme) => (theme.value("--blyrics-animate-word-wobble") === "0" ? null : ["on by default: `--blyrics-animate-word-wobble` defaults to `1`"]),
@@ -214,7 +218,7 @@ export const FEATURES = [
   {
     id: "syllable-wobble",
     title: "Wobble per syllable",
-    cost: "low",
+    cost: "low", // +0.00 ms
     reason: "moves each syllable as one piece instead of each word",
     tip: null,
     detect: (theme) => {
@@ -226,7 +230,7 @@ export const FEATURES = [
   {
     id: "rest-transform",
     title: "Words rising from a rest pose",
-    cost: "low",
+    cost: "low", // est.: as word-wobble
     reason: "moves each word as one piece until it is sung",
     tip: null,
     detect: (theme) => {
@@ -237,7 +241,7 @@ export const FEATURES = [
   {
     id: "image-highlights",
     title: "Image highlights",
-    cost: "low",
+    cost: "low", // est.: one more quad per instrumental
     reason: "fills the instrumental note with `--blyrics-highlight-image`",
     tip: null,
     detect: (theme) => (theme.setting("blyrics-image-highlights")?.toLowerCase() === "true" ? [`\`blyrics-image-highlights = ${theme.setting("blyrics-image-highlights")};\` (comment setting)`] : null),
@@ -245,7 +249,7 @@ export const FEATURES = [
   {
     id: "romanized-pill",
     title: "Romanization box",
-    cost: "low",
+    cost: "low", // est.: one quad per romanization
     reason: "one quad behind each romanization, in songs that have them",
     tip: null,
     detect: (theme) => {

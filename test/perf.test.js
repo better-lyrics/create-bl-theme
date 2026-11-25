@@ -18,7 +18,7 @@ test("a theme that sets nothing has the default features", () => {
   const report = perfReport(".blyrics-container { --blyrics-font-size: 2rem }");
   assert.deepEqual(report.features.map((f) => f.id), ["glow-every-word", "letter-wave-every-word", "word-wobble", "romanized-pill"]);
   assert.ok(report.features.every((f) => f.source.every((s) => s.startsWith("on by default"))));
-  assert.deepEqual([report.overall, report.because], ["high", ["glow-every-word"]]);
+  assert.deepEqual([report.overall, report.because], ["medium", ["glow-every-word"]]);
 });
 
 test("the glow is on every word, on held words only, or off", () => {

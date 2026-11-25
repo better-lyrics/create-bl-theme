@@ -102,7 +102,7 @@ npx create-bl-theme@beta perf ./my-theme
 npx create-bl-theme@beta perf ./my-theme --json
 ```
 
-It reads `style.rics` (compiled) or `style.css`, including the block `migrate` writes, and lists the WebGL renderer's features the theme turns on, dearest first: what turned each on (a variable and its selector, a comment setting, or the renderer's default), whether it costs little, some or a lot and why, and a cheaper way to get it where there is one, such as `/* blyrics-letter-wave = long; */` in place of waving every word. It ends with an overall rating, the dearest feature's. Some features are on unless a theme turns them off: the glow on every word, the letter wave and the word wobble. The costs are estimates for now, to be replaced by measured ones.
+It reads `style.rics` (compiled) or `style.css`, including the block `migrate` writes, and lists the WebGL renderer's features the theme turns on, dearest first: what turned each on (a variable and its selector, a comment setting, or the renderer's default), whether it costs little, some or a lot and why, and a cheaper way to get it where there is one, such as `/* blyrics-letter-wave = long; */` in place of waving every word. It ends with an overall rating, the dearest feature's. Some features are on unless a theme turns them off: the glow on every word, the letter wave and the word wobble. The costs were measured with braccato's benchmark as the GPU time each feature adds to a frame on a desktop GPU: low is under 0.05 ms, medium up to 0.25 ms, high more. Only blurring lines by their distance rates high; the default glow on every word, text shadows and line boxes rate medium.
 
 ### Install the theme skill for your AI assistant
 
