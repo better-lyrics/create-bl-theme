@@ -7,14 +7,17 @@
 const UNCONDITIONAL_AT_RULE = /^@(?:layer\b|media\s+(?:all|screen)$)/i;
 const NOT_STYLE_RULES = /^@(?:-[\w-]+-)?(?:keyframes|font-face|property|page|counter-style|font-feature-values)\b/i;
 
-/** Style rules in order: { selector, conditional, declarations: [name, value, important][] }. */
+/**
+ * Style rules in order: { selector, conditional, conditions, declarations: [name, value, important][] },
+ * `conditions` being the heads of the conditional at-rules around the rule (`@media (…)`).
+ */
 export function parseRules(css) {
   const text = blankComments(css);
   const rules = [];
 
-  function read(start, parent, conditional, record) {
+  function read(start, parent, conditions, record) {
     const own = [];
-    if (parent && record) rules.push({ selector: parent, conditional, declarations: own });
+    if (parent && record) rules.push({ selector: parent, conditional: conditions.length > 0, conditions, declarations: own });
     let from = start;
     let depth = 0;
     for (let i = start; i < text.length; i++) {
@@ -33,10 +36,9 @@ export function parseRules(css) {
       } else if (ch === "{") {
         const head = text.slice(from, i).trim().replace(/\s+/g, " ");
         if (head.startsWith("@")) {
-          const condition = conditional || !UNCONDITIONAL_AT_RULE.test(head);
-          i = read(i + 1, parent, condition, record && !NOT_STYLE_RULES.test(head)) - 1;
+          i = read(i + 1, parent, UNCONDITIONAL_AT_RULE.test(head) ? conditions : [...conditions, head], record && !NOT_STYLE_RULES.test(head)) - 1;
         } else {
-          i = read(i + 1, parent ? nest(parent, head) : head, conditional, record) - 1;
+          i = read(i + 1, parent ? nest(parent, head) : head, conditions, record) - 1;
         }
         from = i + 1;
       }
@@ -45,8 +47,31 @@ export function parseRules(css) {
     return text.length;
   }
 
-  read(0, "", false, true);
+  read(0, "", [], true);
   return rules.filter((rule) => rule.declarations.length > 0);
+}
+
+/**
+ * The `@keyframes` in `css` by name, the last of each wherever it is: a list of
+ * { selector, declarations } with the stops (`0%`, `from`, `0%, 100%`) as selectors.
+ */
+export function parseKeyframes(css) {
+  const text = blankComments(css);
+  const out = new Map();
+  for (const m of text.matchAll(/@(?:-[\w-]+-)?keyframes\s+([^\s{]+)\s*\{/gi)) {
+    const start = m.index + m[0].length;
+    let depth = 1;
+    let end = start;
+    for (; end < text.length && depth > 0; end++) {
+      const ch = text[end];
+      if (ch === "\\") end++;
+      else if (ch === '"' || ch === "'") end = endOfString(text, end);
+      else if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+    }
+    out.set(m[1].replace(/^["']|["']$/g, ""), parseRules(text.slice(start, end - 1)));
+  }
+  return out;
 }
 
 function nest(parent, head) {

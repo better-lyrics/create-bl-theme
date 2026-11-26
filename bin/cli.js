@@ -10,6 +10,7 @@ import { imageSize } from "image-size";
 import { execSync, spawn } from "child_process";
 import { compileWithDetails } from "rics";
 import { DISCORD_URL, migrateForWebgl, withoutBlock } from "./webgl.js";
+import { perfReport } from "./perf.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -115,6 +116,12 @@ async function main() {
     return;
   }
 
+  // JSON goes to stdout alone, so it comes before the banner.
+  if (command === "perf" && args.includes("--json")) {
+    perf(args.slice(1).find((a) => !a.startsWith("-")) || ".", { json: true });
+    return;
+  }
+
   console.log();
   console.log(pc.bold(pc.cyan("  Better Lyrics Theme Creator")) + pc.dim(` v${pkg.version}`));
   console.log(pc.dim("  Create themes for Better Lyrics extension"));
@@ -143,6 +150,11 @@ async function main() {
     return;
   }
 
+  if (command === "perf") {
+    perf(args.slice(1).find((a) => !a.startsWith("-")) || ".");
+    return;
+  }
+
   if (command === "skill") {
     await skill(args[1] || ".");
     return;
@@ -162,6 +174,7 @@ ${pc.bold("Usage:")}
   ${pc.cyan("create-bl-theme")} publish [dir]       Check publishing status
   ${pc.cyan("create-bl-theme")} bump [type] [dir]   Bump version (patch, minor, major)
   ${pc.cyan("create-bl-theme")} migrate [dir|file]  Migrate a theme to the current engine and the WebGL renderer
+  ${pc.cyan("create-bl-theme")} perf [dir|file]     Show what a theme's effects cost in the WebGL renderer (--json)
   ${pc.cyan("create-bl-theme")} skill [dir]         Install the theme skill into your AI assistants
 
 ${pc.bold("Options:")}
@@ -177,6 +190,7 @@ ${pc.bold("Examples:")}
   ${pc.dim("$")} create-bl-theme bump minor ./my-theme
   ${pc.dim("$")} create-bl-theme migrate
   ${pc.dim("$")} create-bl-theme migrate ./my-theme --write
+  ${pc.dim("$")} create-bl-theme perf ./my-theme
   ${pc.dim("$")} create-bl-theme skill
 
 ${pc.bold("Theme Structure:")}
@@ -1040,54 +1054,72 @@ async function bump(typeOrDir, dirArg) {
 // skills/MIGRATION.md.
 // ---------------------------------------------------------------------------
 
-async function migrate(target, { write } = {}) {
+/**
+ * The style file a target names: a file path is used directly; a directory prefers style.rics,
+ * then style.css (same rule as validate). Exits when there is none.
+ */
+function stylePathOf(target, log = console.log) {
   const resolved = path.resolve(process.cwd(), target);
 
   if (!fs.existsSync(resolved)) {
-    console.log(pc.red(`Error: "${target}" does not exist.`));
+    log(pc.red(`Error: "${target}" does not exist.`));
     process.exit(1);
   }
 
-  // Resolve to a style file: a file path is used directly; a directory prefers
-  // style.rics, then style.css (same rule as validate).
-  let stylePath = resolved;
-  if (fs.statSync(resolved).isDirectory()) {
-    const ricsPath = path.join(resolved, "style.rics");
-    const cssPath = path.join(resolved, "style.css");
-    if (fs.existsSync(ricsPath)) stylePath = ricsPath;
-    else if (fs.existsSync(cssPath)) stylePath = cssPath;
-    else {
-      console.log(pc.red(`Error: no style.rics or style.css in "${target}".`));
-      process.exit(1);
-    }
-  }
+  if (!fs.statSync(resolved).isDirectory()) return resolved;
+  const ricsPath = path.join(resolved, "style.rics");
+  const cssPath = path.join(resolved, "style.css");
+  if (fs.existsSync(ricsPath)) return ricsPath;
+  if (fs.existsSync(cssPath)) return cssPath;
+  log(pc.red(`Error: no style.rics or style.css in "${target}".`));
+  process.exit(1);
+}
 
+/** `text` as CSS: compiled when it is RICS. Returns { css, errors }. */
+function compiledStyle(stylePath, text) {
+  if (!stylePath.endsWith(".rics")) return { css: text, errors: [] };
+  try {
+    const result = compileWithDetails(text);
+    return { css: result.css, errors: result.errors.map((err) => err.message) };
+  } catch (e) {
+    return { css: "", errors: [e.message] };
+  }
+}
+
+async function migrate(target, { write } = {}) {
+  const stylePath = stylePathOf(target);
   const source = fs.readFileSync(stylePath, "utf-8");
   const engine = migrateSource(source);
   // The WebGL renderer pass reads the compiled CSS, so RICS nesting and variables are resolved.
-  let compiled = withoutBlock(engine.output);
-  if (stylePath.endsWith(".rics")) {
-    let errors;
-    try {
-      const result = compileWithDetails(compiled);
-      errors = result.errors.map((err) => err.message);
-      compiled = result.css;
-    } catch (e) {
-      errors = [e.message];
-    }
-    // Values read from half a theme would be wrong, so nothing is written from one.
-    if (errors.length > 0) {
-      console.log(pc.red(pc.bold("  style.rics does not compile, so nothing was migrated. Fix this and run migrate again:")));
-      errors.forEach((message) => console.log(pc.red(`    - ${message}`)));
-      console.log();
-      process.exit(1);
-    }
+  const { css: compiled, errors } = compiledStyle(stylePath, withoutBlock(engine.output));
+  // Values read from half a theme would be wrong, so nothing is written from one.
+  if (errors.length > 0) {
+    console.log(pc.red(pc.bold("  style.rics does not compile, so nothing was migrated. Fix this and run migrate again:")));
+    errors.forEach((message) => console.log(pc.red(`    - ${message}`)));
+    console.log();
+    process.exit(1);
   }
   const webgl = migrateForWebgl(engine.output, compiled);
   const output = webgl.output;
-  const changes = [...engine.changes, ...webgl.changes];
-  const flags = [...engine.flags, ...webgl.flags.map(placed)];
-  const unsupported = webgl.unsupported.map(placed);
+  // The two passes are reported apart: the WebGL findings stand on their own, and the old engine's
+  // still matter to the current DOM renderer. A flag the WebGL block settles is not repeated.
+  const sections = [
+    {
+      title: "WebGL renderer",
+      changes: webgl.changes,
+      flags: webgl.flags.map(placed),
+      unsupported: webgl.unsupported.map(placed),
+    },
+    {
+      title: "Current renderer (left over from the old animation engine)",
+      changes: engine.changes,
+      flags: engine.flags.filter((f) => !webgl.settles.includes(f.code)),
+      unsupported: [],
+    },
+  ];
+  const changes = sections.flatMap((s) => s.changes);
+  const flags = sections.flatMap((s) => s.flags);
+  const unsupported = sections.flatMap((s) => s.unsupported);
 
   const rel = path.relative(process.cwd(), stylePath);
   const shown = rel && !rel.startsWith("..") ? rel : stylePath;
@@ -1102,25 +1134,31 @@ async function migrate(target, { write } = {}) {
     return;
   }
 
-  if (changes.length > 0) {
-    console.log(pc.green(pc.bold("  Applied automatically:")));
-    changes.forEach((c) => console.log(pc.dim(`    L${c.line}  `) + c.message));
+  for (const section of sections) {
+    if (section.changes.length === 0 && section.flags.length === 0 && section.unsupported.length === 0) continue;
+    console.log(pc.bold(pc.underline(`  ${section.title}`)));
     console.log();
-  }
 
-  if (flags.length > 0) {
-    console.log(pc.yellow(pc.bold("  Needs review (not changed):")));
-    flags.forEach((f) => console.log(pc.yellow(`    ${f.at}  `) + f.message));
-    console.log();
-  }
+    if (section.changes.length > 0) {
+      console.log(pc.green(pc.bold("  Applied automatically:")));
+      section.changes.forEach((c) => console.log(pc.dim(`    L${c.line}  `) + c.message));
+      console.log();
+    }
 
-  if (unsupported.length > 0) {
-    console.log(pc.magenta(pc.bold("  Not possible in the WebGL renderer yet:")));
-    unsupported.forEach((f) => console.log(pc.magenta(`    ${f.at}  `) + f.message));
-    console.log();
-    console.log(pc.magenta("  If your theme needs one of these, ask in the Better Lyrics Discord so it can be added to"));
-    console.log(pc.magenta("  the renderer: ") + pc.cyan(DISCORD_URL));
-    console.log();
+    if (section.flags.length > 0) {
+      console.log(pc.yellow(pc.bold("  Needs review (not changed):")));
+      section.flags.forEach((f) => console.log(pc.yellow(`    ${f.at}  `) + f.message));
+      console.log();
+    }
+
+    if (section.unsupported.length > 0) {
+      console.log(pc.magenta(pc.bold("  Not possible in the WebGL renderer yet:")));
+      section.unsupported.forEach((f) => console.log(pc.magenta(`    ${f.at}  `) + f.message));
+      console.log();
+      console.log(pc.magenta("  If your theme needs one of these, ask in the Better Lyrics Discord so it can be added to"));
+      console.log(pc.magenta("  the renderer: ") + pc.cyan(DISCORD_URL));
+      console.log();
+    }
   }
 
   if (!write) {
@@ -1154,6 +1192,54 @@ async function migrate(target, { write } = {}) {
     console.log();
     console.log(pc.yellow("  Resolve the review items above by hand, then run ") + pc.cyan("validate") + pc.yellow("."));
   }
+  console.log();
+}
+
+// ---------------------------------------------------------------------------
+// Perf report: which features of the WebGL renderer a theme turns on and what
+// each costs (bin/perf.js, with the costs in bin/perf-costs.js).
+// ---------------------------------------------------------------------------
+
+function perf(target, { json } = {}) {
+  const log = json ? console.error : console.log;
+  const stylePath = stylePathOf(target, log);
+  // The block migrate wrote is what the WebGL renderer reads, so it is read too.
+  const source = fs.readFileSync(stylePath, "utf-8");
+  const { css, errors } = compiledStyle(stylePath, source);
+  if (errors.length > 0) {
+    log(pc.red(pc.bold("  style.rics does not compile, so it cannot be read:")));
+    errors.forEach((message) => log(pc.red(`    - ${message}`)));
+    process.exit(1);
+  }
+  const report = perfReport(css);
+  // What migrate would still write: until then the report sees the variables only, not the rules.
+  const engine = migrateSource(source).output;
+  const migrated = migrateForWebgl(engine, compiledStyle(stylePath, withoutBlock(engine)).css).output === source;
+  const rel = path.relative(process.cwd(), stylePath);
+  const shown = rel && !rel.startsWith("..") ? rel : stylePath;
+  if (json) {
+    console.log(JSON.stringify({ file: shown, migrated, ...report }, null, 2));
+    return;
+  }
+
+  const paint = { low: pc.green, medium: pc.yellow, high: pc.red };
+  const label = (cost) => paint[cost](pc.bold(cost.toUpperCase().padEnd(6)));
+  console.log(pc.bold(`  What ${pc.cyan(shown)} costs in the WebGL renderer`));
+  console.log();
+  if (!migrated) {
+    console.log(pc.yellow(`  migrate would still change this theme; run ${pc.cyan("migrate --write")} first, since this report reads only the renderer's variables.`));
+    console.log();
+  }
+  for (const feature of report.features) {
+    console.log(`  ${label(feature.cost)}  ${pc.bold(feature.title)}: ${feature.reason}.`);
+    for (const source of feature.source) console.log(pc.dim(`          ${source}`));
+    if (feature.tip) console.log(`          ${pc.cyan("Cheaper:")} ${feature.tip}`);
+    console.log();
+  }
+  const because = report.features.filter((f) => report.because.includes(f.id)).map((f) => f.title.toLowerCase());
+  console.log(`  ${pc.bold("Overall:")} ${label(report.overall).trim()}${because.length ? pc.dim(`, from ${because.join(" and ")}`) : ""}`);
+  console.log(pc.dim("  Costs are the GPU time each feature adds to a frame on a desktop GPU: low is under 0.05 ms, medium up to"));
+  console.log(pc.dim("  0.25 ms, high more. A frame at 60 fps has 16.7 ms, so even high matters mostly on slow or battery-saving GPUs."));
   console.log();
 }
 
