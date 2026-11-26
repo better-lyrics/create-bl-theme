@@ -3,6 +3,10 @@
   "version": "1.2.0-beta.1",
   "description": "CLI tool to scaffold Better Lyrics themes",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/better-lyrics/create-bl-theme.git"
+  },
   "bin": {
     "create-bl-theme": "bin/cli.js"
   },
