@@ -127,6 +127,15 @@ It writes a value only where the CSS cascade settles it. It leaves these to you,
 
 It never replaces a `--blyrics-*` value or comment setting the theme already sets, and it writes nothing for a `.rics` file that does not compile. The preview lists the WebGL findings first, then, under their own heading, what the old animation engine's rules still need for the current DOM renderer.
 
+To see what a theme costs to draw in the WebGL renderer, after migrating or while writing one:
+
+```sh
+npx create-bl-theme@beta perf ./their-theme         # report
+npx create-bl-theme@beta perf ./their-theme --json  # the same report as JSON
+```
+
+It reads `style.rics` (compiled) or `style.css`, including the block `migrate` writes, and lists the renderer features the theme turns on, dearest first. For each it says what turned it on (a variable and its selector, a comment setting, or the renderer's default), whether it costs little, some or a lot, and a cheaper way to get it where there is one. It ends with an overall rating, the dearest feature's. Only blurring lines by their distance rates high. The glow on every word, text shadows and line boxes rate medium. The glow is on by default, so it is the dearest thing most themes have: `.blyrics-word-highlight:not([data-long-word]) { --blyrics-glow-color: transparent; }` keeps it to held words.
+
 ### What still works
 
 - Every `--blyrics-*` variable for colour, font, size, spacing and timing, and every `/* blyrics-key = value; */` comment setting.
@@ -137,7 +146,7 @@ It never replaces a `--blyrics-*` value or comment setting the theme already set
 
 - Paint on lyric elements: `opacity`, `filter`, `transform`, `scale`, `color`, `text-shadow`, `background`, `border`, `box-shadow`, `outline`, `-webkit-text-stroke`, `mix-blend-mode`. The variables below stand in for the common cases.
 - `animation`, `transition` and `@keyframes` on lyric elements. The renderer times its own effects.
-- `::before` / `::after` on lyric elements. The word's `::after` was the DOM renderer's sweep overlay; the WebGL renderer draws the sweep itself, so rules that only tuned it (`animation: none` and the like) need nothing. A note on instrumental lines and the no-lyrics message and icon have variables (below).
+- `::before` / `::after` on lyric elements. The word's `::after` was the DOM renderer's sweep overlay; the WebGL renderer draws the sweep itself, so rules that only tuned it (`animation: none` and the like) need nothing. They take up no room either, on instrumental and no-lyrics lines too. A note on instrumental lines and the no-lyrics message and icon have variables (below).
 - The state classes are never set: `.blyrics--active`, `.blyrics--animating`, `.blyrics--paused` and `[data-word-state]` match nothing, so rules keyed off them do nothing, and variables set under them are never read. `.blyrics-user-scrolling` is still set on the container.
 - `:hover` on lines, except the opacity, blur, scale, word colour, text shadow and box of the hovered line and the opacity of the others, which have variables (below).
 
@@ -261,7 +270,7 @@ The box scales, fades and blurs with its line. Only solid colours are drawn: a g
 - The CLI reads the note from the instrumental line's `::before` or `::after`, or the empty line's `.blyrics--line:has(.blyrics-bidi-run:empty) .blyrics-line-main::before`, and the pulse from the largest scale in the keyframes that note runs while the line is sung. Only the scale carries over; opacity or shadows in those keyframes do not.
 - An empty `content` with a `radial-gradient()` mask repeated in x is taken for the three dots. Anything else drawn there is left to you, since the renderer draws only these icons.
 
-**No lyrics.** When a song has no lyrics, `--blyrics-no-lyrics-text` (a CSS string) replaces the host's message, and `--blyrics-no-lyrics-icon` (a CSS string) is drawn above it, in a real `.blyrics-no-lyrics-icon` element (display block, `4em` by default). Both are read once from `.blyrics-container`. The icon's size and colour are its own `font-size` and `color`; the message takes the line's style.
+**No lyrics.** When a song has no lyrics, `--blyrics-no-lyrics-text` (a CSS string) replaces the host's message, and `--blyrics-no-lyrics-icon` (a CSS string) is drawn above it, in a real `.blyrics-no-lyrics-icon` element (display block, `4em` by default). Both are read once from `.blyrics-container`. The icon's size and colour are its own `font-size` and `color`; the message takes the line's style. A theme that hides the host's message to draw its own in a pseudo-element shows the host's message instead, so set `--blyrics-no-lyrics-text` (the CLI writes it from the pseudo-element's `content`).
 
 ```css
 .blyrics-container[data-no-lyrics="true"] .blyrics--line::before { content: "♫"; font-size: 6rem; }
@@ -283,7 +292,7 @@ The CLI writes the message's `font-size` and `font-weight` onto the line only wh
 - `--blyrics-glow-color`: the glow.
 - `--blyrics-translated-color`: translations and romanizations.
 
-`--blyrics-text-color` with `--blyrics-inactive-opacity` / `--blyrics-active-opacity` still derive the first two. A colour with alpha is how a word or line is made translucent.
+`--blyrics-text-color` with `--blyrics-inactive-opacity` / `--blyrics-active-opacity` still derive the first two. A colour with alpha is how a word or line is made translucent. A colour variable set to something that is not a colour counts as unset, so it falls back to its default rather than to transparent; use `transparent` to draw nothing.
 
 **Size.** The sung line's scale is `--blyrics-active-scale` (default 1) and the others' is `--blyrics-scale` (default 0.95), timed by `--blyrics-scale-transition-duration` and eased by `--blyrics-line-enter-easing` / `--blyrics-line-exit-easing`.
 
