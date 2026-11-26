@@ -43,7 +43,7 @@ function runCli(name, source) {
   try {
     const file = path.join(dir, name);
     fs.writeFileSync(file, source);
-    const { stdout, status } = spawnSync(process.execPath, [CLI, "migrate", file, "--write"], { encoding: "utf8" });
+    const { stdout, status } = spawnSync(process.execPath, [CLI, "migrate", file, "--write"], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
     return { output: fs.readFileSync(file, "utf8"), stdout, status };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
